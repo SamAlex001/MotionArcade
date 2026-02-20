@@ -80,7 +80,7 @@ export function useHandTracking(): HandTrackingHook {
 
   const startVideo = useCallback(async (): Promise<void> => {
     return new Promise(async (resolve, reject) => {
-      if (isLoading || (videoRef.current && videoRef.current.srcObject)) {
+      if (videoRef.current && videoRef.current.srcObject) {
         resolve();
         return;
       }
@@ -98,12 +98,22 @@ export function useHandTracking(): HandTrackingHook {
         });
 
         video.srcObject = stream;
+        video.muted = true;
+        video.playsInline = true;
+        await video.play();
+
         const videoReady = () => {
           predictWebcam();
           video.removeEventListener('loadeddata', videoReady);
           resolve();
         };
-        video.addEventListener('loadeddata', videoReady);
+
+        if (video.readyState >= 2) {
+          predictWebcam();
+          resolve();
+        } else {
+          video.addEventListener('loadeddata', videoReady);
+        }
 
       } catch (err: any) {
         if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
@@ -114,7 +124,7 @@ export function useHandTracking(): HandTrackingHook {
         reject(err);
       }
     });
-  }, [isLoading, isMobile, predictWebcam]);
+  }, [isMobile, predictWebcam]);
 
 
   useEffect(() => {
@@ -127,16 +137,31 @@ export function useHandTracking(): HandTrackingHook {
         
         const modelPath = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-        const handLandmarker = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: modelPath,
-            delegate: 'GPU',
-          },
-          runningMode: 'VIDEO',
-          numHands: 2,
-          minHandDetectionConfidence: 0.7,
-          minHandTrackingConfidence: 0.7,
-        });
+        let handLandmarker: HandLandmarker;
+        try {
+          handLandmarker = await HandLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: modelPath,
+              delegate: 'GPU',
+            },
+            runningMode: 'VIDEO',
+            numHands: 2,
+            minHandDetectionConfidence: 0.5,
+            minHandTrackingConfidence: 0.5,
+          });
+        } catch (gpuError) {
+          console.warn('GPU delegate failed, falling back to CPU:', gpuError);
+          handLandmarker = await HandLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: modelPath,
+              delegate: 'CPU',
+            },
+            runningMode: 'VIDEO',
+            numHands: 2,
+            minHandDetectionConfidence: 0.5,
+            minHandTrackingConfidence: 0.5,
+          });
+        }
         handLandmarkerRef.current = handLandmarker;
 
       } catch (e: any) {
