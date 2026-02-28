@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Hand, Loader, Sparkles } from 'lucide-react';
 import type { Landmark } from '@mediapipe/tasks-vision';
 import * as ThreeHand from './three-hand-renderer';
+import { createLandmarkMapper } from '@/lib/video-utils';
 
 // ─── Hand topology ───────────────────────────────────────────────
 const HAND_CONNECTIONS: [number, number][] = [
@@ -60,8 +61,10 @@ function avgZ(lm: Landmark[], indices: number[]): number {
   return s / indices.length;
 }
 
+type CoordMapper = (lx: number, ly: number) => { x: number; y: number };
+
 // ─── Classic draw (original simple skeleton) ─────────────────────
-function drawClassic(ctx: CanvasRenderingContext2D, W: number, H: number, hands: Landmark[][]) {
+function drawClassic(ctx: CanvasRenderingContext2D, W: number, H: number, hands: Landmark[][], map: CoordMapper) {
   ctx.clearRect(0, 0, W, H);
   if (hands.length === 0) return;
 
@@ -72,8 +75,8 @@ function drawClassic(ctx: CanvasRenderingContext2D, W: number, H: number, hands:
       const s = hand[si];
       const e = hand[ei];
       if (!s || !e) continue;
-      const sx = (1 - s.x) * W, sy = s.y * H;
-      const ex = (1 - e.x) * W, ey = e.y * H;
+      const { x: sx, y: sy } = map(s.x, s.y);
+      const { x: ex, y: ey } = map(e.x, e.y);
       const az = (s.z + e.z) / 2;
       ctx.lineWidth = scaleWithDepth(az, 1, 6);
       ctx.beginPath();
@@ -85,8 +88,7 @@ function drawClassic(ctx: CanvasRenderingContext2D, W: number, H: number, hands:
     // Landmarks
     ctx.fillStyle = '#a78bfa'; // Violet-400
     for (const point of hand) {
-      const x = (1 - point.x) * W;
-      const y = point.y * H;
+      const { x, y } = map(point.x, point.y);
       const r = scaleWithDepth(point.z, 2, 8);
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -99,7 +101,7 @@ function drawClassic(ctx: CanvasRenderingContext2D, W: number, H: number, hands:
 function drawFancy(
   ctx: CanvasRenderingContext2D, W: number, H: number,
   hands: Landmark[][], timestamp: number, dt: number,
-  particles: Particle[]
+  particles: Particle[], map: CoordMapper
 ): Particle[] {
   // Motion blur fade
   ctx.globalCompositeOperation = 'destination-in';
@@ -111,8 +113,9 @@ function drawFancy(
 
   if (hands.length > 0) {
     for (const hand of hands) {
-      const px = (i: number) => (1 - hand[i].x) * W;
-      const py = (i: number) => hand[i].y * H;
+      const m = hand.map((lm) => map(lm.x, lm.y));
+      const px = (i: number) => m[i].x;
+      const py = (i: number) => m[i].y;
 
       // 1. Mesh fill
       for (const [a, b, c] of MESH_TRIANGLES) {
@@ -181,8 +184,7 @@ function drawFancy(
 
       // 4. Spawn particles
       for (const ti of FINGERTIP_INDICES) {
-        const tip = hand[ti];
-        const x = (1 - tip.x) * W, y = tip.y * H;
+        const x = px(ti), y = py(ti);
         for (let n = 0; n < 2; n++) {
           particles.push({
             x, y,
@@ -190,7 +192,7 @@ function drawFancy(
             vy: (Math.random() - 0.5) * 1.5 - 0.5,
             life: 1, maxLife: 1,
             size: 1.5 + Math.random() * 2.5,
-            hue: depthHue(tip.z) + (Math.random() - 0.5) * 40,
+            hue: depthHue(hand[ti].z) + (Math.random() - 0.5) * 40,
           });
         }
       }
@@ -304,10 +306,12 @@ export default function JustShowYourHandsClient() {
           ThreeHand.render(threeStateRef.current);
         }
       } else if (mode === 'fancy') {
-        particlesRef.current = drawFancy(ctx, W, H, hands, timestamp, dt, particlesRef.current);
+        const mapper = createLandmarkMapper(video);
+        particlesRef.current = drawFancy(ctx, W, H, hands, timestamp, dt, particlesRef.current, mapper);
       } else {
         particlesRef.current = [];
-        drawClassic(ctx, W, H, hands);
+        const mapper = createLandmarkMapper(video);
+        drawClassic(ctx, W, H, hands, mapper);
       }
 
       animRef.current = requestAnimationFrame(draw);
@@ -347,7 +351,7 @@ export default function JustShowYourHandsClient() {
 
   return (
     <div className="container mx-auto px-4 py-8 flex flex-col items-center justify-center flex-grow">
-      <div className={`w-full max-w-7xl aspect-video relative rounded-lg shadow-lg overflow-hidden ${visualMode === 'classic' ? 'bg-muted' : 'bg-black'}`}>
+      <div className={`w-full max-w-7xl aspect-[3/4] lg:aspect-video relative rounded-lg shadow-lg overflow-hidden ${visualMode === 'classic' ? 'bg-muted' : 'bg-black'}`}>
         <video
           ref={videoRef}
           autoPlay playsInline muted

@@ -10,6 +10,7 @@ import { CheckCircle2, XCircle, Loader, Hand, Timer, Smartphone, Info } from 'lu
 import { Progress } from '@/components/ui/progress';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { landmarkToCanvas } from '@/lib/video-utils';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 
@@ -168,8 +169,7 @@ export default function MathChallengeClient() {
       const wrist = primaryHand[0]; 
       if (!wrist) return;
 
-      const x = (1 - wrist.x) * canvas.width;
-      const y = wrist.y * canvas.height;
+      const { x, y } = landmarkToCanvas(wrist.x, wrist.y, video);
       
       ctx.beginPath();
       ctx.arc(x, y - 40, 30, 0, 2 * Math.PI);
@@ -229,7 +229,7 @@ export default function MathChallengeClient() {
 
     return (
       <div className="w-full max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-        <div className="relative w-full aspect-video rounded-lg overflow-hidden bg-muted shadow-lg">
+        <div className="relative w-full aspect-[3/4] lg:aspect-video rounded-lg overflow-hidden bg-muted shadow-lg">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover scale-x-[-1]"></video>
           <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
           

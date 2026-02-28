@@ -10,6 +10,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Loader, Pencil, Eraser, Sparkles, Circle, Square, Triangle, Star, Heart, ArrowRight, Home, CheckCircle2, XCircle, Hand } from 'lucide-react';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import { landmarkToCanvas } from '@/lib/video-utils';
 
 type GameState = 'IDLE' | 'LOADING_CAMERA' | 'GET_READY' | 'COUNTDOWN' | 'DRAWING' | 'SUBMITTING' | 'FEEDBACK';
 type DrawingTool = 'PENCIL' | 'ERASER';
@@ -274,11 +275,9 @@ export default function SketchAndScoreClient() {
 
             if (activeLandmark && activeTool) {
                 const drawingCtx = getDrawingContext();
-                if (drawingCanvasRef.current && drawingCtx) {
-                    const canvas = drawingCanvasRef.current;
-                    const x = activeLandmark.x * canvas.width;
-                    const y = activeLandmark.y * canvas.height;
-                    const mirroredX = canvas.width - x;
+                const video = videoRef.current;
+                if (drawingCanvasRef.current && drawingCtx && video) {
+                    const { x: mirroredX, y } = landmarkToCanvas(activeLandmark.x, activeLandmark.y, video, true);
 
                     if (activeTool === 'PENCIL') {
                         drawingCtx.globalCompositeOperation = 'source-over';
@@ -332,10 +331,15 @@ export default function SketchAndScoreClient() {
 
           // Draw eraser size indicator on the overlay canvas
           if (overlayCtx && overlayCanvasRef.current) {
-            const canvas = overlayCanvasRef.current;
-            // Calculate midpoint between thumb and index finger
-            const midX = (1 - (thumbTip.x + indexTip.x) / 2) * canvas.width;
-            const midY = ((thumbTip.y + indexTip.y) / 2) * canvas.height;
+            const video = videoRef.current;
+            if (video) {
+              // Calculate midpoint between thumb and index finger
+              const { x: midX, y: midY } = landmarkToCanvas(
+                (thumbTip.x + indexTip.x) / 2,
+                (thumbTip.y + indexTip.y) / 2,
+                video,
+                true
+              );
 
             overlayCtx.save();
             overlayCtx.globalAlpha = 0.5;
@@ -357,6 +361,7 @@ export default function SketchAndScoreClient() {
             overlayCtx.textBaseline = 'middle';
             overlayCtx.fillText(Math.round(eraserSize).toString(), midX, midY);
             overlayCtx.restore();
+            }
           }
         }
     } else {
@@ -537,7 +542,7 @@ export default function SketchAndScoreClient() {
 
   return (
     <div className="container mx-auto px-4 py-8 flex-grow flex flex-col items-center justify-center">
-      <div className="w-full max-w-7xl aspect-video relative rounded-lg shadow-lg overflow-hidden bg-muted">
+      <div className="w-full max-w-7xl aspect-[3/4] lg:aspect-video relative rounded-lg shadow-lg overflow-hidden bg-muted">
         {renderContent()}
       </div>
     </div>

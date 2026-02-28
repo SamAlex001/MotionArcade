@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useHandTracking } from '@/hooks/use-hand-tracking';
 import { Loader, Trophy, Zap } from 'lucide-react';
 import type { Landmark } from '@mediapipe/tasks-vision';
+import { landmarkToNormalized } from '@/lib/video-utils';
 
 // Constants
 const PADDLE_WIDTH = 120;
@@ -180,10 +181,12 @@ export default function PingPongClient() {
 
     // Move paddle with hand (throttled to every frame now, no extra processing)
     if (landmarksRef.current && landmarksRef.current.length > 0) {
+      const video = videoRef.current;
       const hand = landmarksRef.current[0];
       const indexFinger = hand[8]; // Using index finger tip (landmark 8) for more precise control
-      if (indexFinger) {
-        const newPaddleX = (1 - indexFinger.x) * gameCanvas.width - PADDLE_WIDTH / 2;
+      if (indexFinger && video) {
+        const { nx } = landmarkToNormalized(indexFinger.x, 0, video);
+        const newPaddleX = nx * gameCanvas.width - PADDLE_WIDTH / 2;
         playerPaddle.current.x = Math.max(0, Math.min(newPaddleX, gameCanvas.width - PADDLE_WIDTH));
       }
     }
@@ -344,7 +347,7 @@ export default function PingPongClient() {
           <div className="lg:w-1/2 w-full">
             <div className="relative">
               <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-cyan-600 rounded-lg blur opacity-25"></div>
-              <div className="relative aspect-[4/3] bg-black flex items-center justify-center rounded-lg overflow-hidden border-2 border-blue-500/50">
+              <div className="relative aspect-[3/4] lg:aspect-[4/3] bg-black flex items-center justify-center rounded-lg overflow-hidden border-2 border-blue-500/50">
                 {isLoading && (
                   <div className="absolute inset-0 bg-gradient-to-br from-slate-900 to-slate-800 flex flex-col gap-4 items-center justify-center text-white z-30">
                     <Loader className="h-16 w-16 animate-spin text-blue-400" />
@@ -372,7 +375,7 @@ export default function PingPongClient() {
           <div className="lg:w-1/2 w-full">
             <div className="relative">
               <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg blur opacity-25"></div>
-              <div className="relative aspect-[4/3] bg-black flex items-center justify-center rounded-lg overflow-hidden border-2 border-blue-500/50">
+              <div className="relative aspect-[3/4] lg:aspect-[4/3] bg-black flex items-center justify-center rounded-lg overflow-hidden border-2 border-blue-500/50">
                 <canvas ref={gameCanvasRef} className="w-full h-full" />
                 
                 {/* Game Over Overlay */}

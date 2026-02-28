@@ -9,6 +9,7 @@ import { Home, Loader, Music, Smartphone, XCircle } from 'lucide-react';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useRouter } from 'next/navigation';
+import { landmarkToNormalized } from '@/lib/video-utils';
 
 const LANE_COUNT = 4;
 const GAME_HEIGHT = 500;
@@ -124,6 +125,7 @@ export default function AirPianoClient() {
     // --- Update finger positions with smoothing ---
     if (handLandmarks) {
         const fingerLandmarks = [handLandmarks[8], handLandmarks[12], handLandmarks[16], handLandmarks[20]]; // Index, Middle, Ring, Pinky
+        const video = videoRef.current;
 
         for (let i = 0; i < LANE_COUNT; i++) {
             const finger = fingerLandmarks[i];
@@ -132,7 +134,10 @@ export default function AirPianoClient() {
             if (finger) {
                  // Calculate the fixed X for the center of the lane
                 const newX = i * LANE_WIDTH + LANE_WIDTH / 2;
-                const newY = finger.y * canvasHeight;
+                const { ny } = video
+                  ? landmarkToNormalized(0, finger.y, video, false)
+                  : { ny: finger.y };
+                const newY = ny * canvasHeight;
 
                 if (!smoothedFingersRef.current[i]) {
                     // Initialize position at the center of the lane
@@ -401,17 +406,17 @@ export default function AirPianoClient() {
     <div className="container mx-auto px-4 py-8 flex flex-col items-center justify-center min-h-screen">
       <div className="w-full flex flex-col lg:flex-row items-center justify-center gap-8">
         {/* Camera Feed */}
-        <div className="relative w-full max-w-[400px] aspect-[4/5] rounded-lg overflow-hidden bg-muted shadow-lg">
+        <div className="relative w-full lg:max-w-[400px] aspect-[3/4] lg:aspect-[4/5] rounded-lg overflow-hidden bg-muted shadow-lg">
             <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover scale-x-[-1]"></video>
             {isHandTrackingLoading && !videoRef.current?.srcObject && <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-white"><Loader className="h-12 w-12 animate-spin" /></div>}
         </div>
         {/* Game Canvas */}
-        <div className="relative" style={{width: LANE_COUNT * LANE_WIDTH, height: GAME_HEIGHT}}>
+        <div className="relative w-full" style={{maxWidth: LANE_COUNT * LANE_WIDTH, aspectRatio: `${LANE_COUNT * LANE_WIDTH} / ${GAME_HEIGHT}`}}>
             <canvas
                 ref={canvasRef}
                 width={LANE_COUNT * LANE_WIDTH}
                 height={GAME_HEIGHT}
-                className="rounded-lg shadow-lg bg-gradient-to-b from-gray-800 to-gray-900"
+                className="w-full h-full rounded-lg shadow-lg bg-gradient-to-b from-gray-800 to-gray-900"
             />
              {renderOverlayContent()}
         </div>

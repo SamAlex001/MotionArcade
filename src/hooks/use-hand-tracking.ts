@@ -90,8 +90,10 @@ export function useHandTracking(): HandTrackingHook {
         const video = await waitForVideo();
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { 
-            width: { ideal: isMobile ? 640 : 1280 }, 
-            height: { ideal: isMobile ? 480 : 720 },
+            // On mobile (portrait), request portrait resolution so the
+            // camera feed fills the taller container naturally.
+            width:  { ideal: isMobile ? 480  : 1280 }, 
+            height: { ideal: isMobile ? 640  : 720  },
             facingMode: "user" 
           },
           audio: false,

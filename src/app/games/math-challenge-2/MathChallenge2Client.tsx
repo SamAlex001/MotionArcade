@@ -12,6 +12,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
+import { landmarkToCanvas } from '@/lib/video-utils';
 
 type GameState = 'IDLE' | 'LOADING' | 'PLAYING' | 'FEEDBACK' | 'LOADING_PROBLEM';
 type Bubble = {
@@ -147,14 +148,14 @@ export default function MathChallenge2Client() {
     
     const videoContainer = videoContainerRef.current;
     const pointer = pointerRef.current;
+    const video = videoRef.current;
     
     // Index finger tip is landmark 8
     const indexTip = landmarks[0][8]; 
-    if (!indexTip || !pointer) return;
+    if (!indexTip || !pointer || !video) return;
 
     const videoRect = videoContainer.getBoundingClientRect();
-    const tipX = (1 - indexTip.x) * videoRect.width;
-    const tipY = indexTip.y * videoRect.height;
+    const { x: tipX, y: tipY } = landmarkToCanvas(indexTip.x, indexTip.y, video);
 
     // Update pointer position imperatively for smoothness
     pointer.style.transform = `translate(${tipX}px, ${tipY}px)`;
@@ -234,7 +235,7 @@ export default function MathChallenge2Client() {
 
     return (
       <div className="w-full max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-        <div ref={videoContainerRef} className="relative w-full aspect-video rounded-lg overflow-hidden bg-muted shadow-lg lg:col-span-2">
+        <div ref={videoContainerRef} className="relative w-full aspect-[3/4] lg:aspect-video rounded-lg overflow-hidden bg-muted shadow-lg lg:col-span-2">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover scale-x-[-1]"></video>
           
           {gameState === 'PLAYING' && (
