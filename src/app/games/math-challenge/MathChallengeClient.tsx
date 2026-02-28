@@ -293,7 +293,7 @@ export default function MathChallengeClient() {
   };
 
   return (
-    <div className="container mx-auto px-4 py-8 flex flex-col items-center justify-center min-h-[calc(100vh-56px)]">
+    <div className="container mx-auto px-4 py-4 lg:py-8 flex flex-col items-center justify-start lg:justify-center min-h-[calc(100vh-56px)]">
       {renderGameState()}
     </div>
   );

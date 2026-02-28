@@ -25,6 +25,11 @@ export function useHandTracking(): HandTrackingHook {
   const requestRef = useRef<number>();
   const handLandmarkerRef = useRef<HandLandmarker | null>(null);
   const isMobile = useIsMobile();
+  const isMobileRef = useRef(false);
+  const frameCountRef = useRef(0);
+
+  // Keep a ref in sync so the animation callback always sees the latest value
+  useEffect(() => { isMobileRef.current = isMobile; }, [isMobile]);
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +42,13 @@ export function useHandTracking(): HandTrackingHook {
     if (!video || !handLandmarkerRef.current || !video.srcObject || video.readyState < 2) {
         requestRef.current = requestAnimationFrame(predictWebcam);
         return;
+    }
+
+    // On mobile, skip every other frame to reduce CPU/GPU load
+    frameCountRef.current++;
+    if (isMobileRef.current && frameCountRef.current % 2 !== 0) {
+      requestRef.current = requestAnimationFrame(predictWebcam);
+      return;
     }
 
     const startTimeMs = performance.now();
@@ -139,6 +151,11 @@ export function useHandTracking(): HandTrackingHook {
         
         const modelPath = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
+        // On mobile: detect only 1 hand and use lower confidence for speed
+        const numHands = isMobile ? 1 : 2;
+        const detectionConf = isMobile ? 0.4 : 0.5;
+        const trackingConf = isMobile ? 0.4 : 0.5;
+
         let handLandmarker: HandLandmarker;
         try {
           handLandmarker = await HandLandmarker.createFromOptions(vision, {
@@ -147,9 +164,9 @@ export function useHandTracking(): HandTrackingHook {
               delegate: 'GPU',
             },
             runningMode: 'VIDEO',
-            numHands: 2,
-            minHandDetectionConfidence: 0.5,
-            minHandTrackingConfidence: 0.5,
+            numHands,
+            minHandDetectionConfidence: detectionConf,
+            minHandTrackingConfidence: trackingConf,
           });
         } catch (gpuError) {
           console.warn('GPU delegate failed, falling back to CPU:', gpuError);
@@ -159,9 +176,9 @@ export function useHandTracking(): HandTrackingHook {
               delegate: 'CPU',
             },
             runningMode: 'VIDEO',
-            numHands: 2,
-            minHandDetectionConfidence: 0.5,
-            minHandTrackingConfidence: 0.5,
+            numHands,
+            minHandDetectionConfidence: detectionConf,
+            minHandTrackingConfidence: trackingConf,
           });
         }
         handLandmarkerRef.current = handLandmarker;
@@ -178,7 +195,8 @@ export function useHandTracking(): HandTrackingHook {
       stopVideo();
       handLandmarkerRef.current?.close();
     };
-  }, [stopVideo]);
+    // Re-run when isMobile resolves so we pick up mobile-tuned settings
+  }, [stopVideo, isMobile]);
 
 
   return { videoRef, detectedFingers, startVideo, stopVideo, isLoading, error, handedness, landmarks };

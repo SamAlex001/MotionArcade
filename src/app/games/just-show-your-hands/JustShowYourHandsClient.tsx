@@ -330,7 +330,7 @@ export default function JustShowYourHandsClient() {
   // ─── Screens ────────────────────────────────────────────────
   if (!isGameStarted) {
     return (
-      <div className="container mx-auto px-4 py-8 flex flex-col items-center justify-center flex-grow">
+      <div className="container mx-auto px-4 py-4 lg:py-8 flex flex-col items-center justify-start lg:justify-center flex-grow">
         <Card className="max-w-md text-center">
           <CardHeader>
             <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -350,8 +350,8 @@ export default function JustShowYourHandsClient() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 flex flex-col items-center justify-center flex-grow">
-      <div className={`w-full max-w-7xl aspect-[3/4] lg:aspect-video relative rounded-lg shadow-lg overflow-hidden ${visualMode === 'classic' ? 'bg-muted' : 'bg-black'}`}>
+    <div className="container mx-auto px-4 py-4 lg:py-8 flex flex-col items-center justify-start lg:justify-center flex-grow">
+      <div className={`w-full max-w-4xl aspect-[3/4] lg:aspect-video relative rounded-lg shadow-lg overflow-hidden ${visualMode === 'classic' ? 'bg-muted' : 'bg-black'}`}>
         <video
           ref={videoRef}
           autoPlay playsInline muted

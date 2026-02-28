@@ -403,7 +403,7 @@ export default function AirPianoClient() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 flex flex-col items-center justify-center min-h-screen">
+    <div className="container mx-auto px-4 py-4 lg:py-8 flex flex-col items-center justify-start lg:justify-center min-h-screen">
       <div className="w-full flex flex-col lg:flex-row items-center justify-center gap-8">
         {/* Camera Feed */}
         <div className="relative w-full lg:max-w-[400px] aspect-[3/4] lg:aspect-[4/5] rounded-lg overflow-hidden bg-muted shadow-lg">

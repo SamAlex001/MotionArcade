@@ -333,7 +333,7 @@ export default function PingPongClient() {
 
 
   return (
-    <main className="container mx-auto px-4 py-8 flex-grow flex flex-col items-center justify-center">
+    <main className="container mx-auto px-4 py-4 lg:py-8 flex-grow flex flex-col items-center justify-start lg:justify-center">
       <div className="w-full max-w-7xl">
         {/* Title Section */}
         <div className="text-center mb-6">
