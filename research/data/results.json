@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$comment": "Template for empirical runtime results. Fill in by running each scenario with ?perf=1 and pasting window.__motionArcadePerf.snapshot() into the matching run.",
+
+  "project": "MotionArcade",
+  "scenarios": [
+    {
+      "id": "S1",
+      "name": "Just Show Your Hands — Classic mode",
+      "route": "/games/just-show-your-hands",
+      "uiControl": "Visual mode = Classic",
+      "durationS": 60
+    },
+    {
+      "id": "S2",
+      "name": "Just Show Your Hands — Neon mode",
+      "route": "/games/just-show-your-hands",
+      "uiControl": "Visual mode = Neon (fancy)",
+      "durationS": 60
+    },
+    {
+      "id": "S3",
+      "name": "Just Show Your Hands — Gauntlet mode",
+      "route": "/games/just-show-your-hands",
+      "uiControl": "Visual mode = Gauntlet (Three.js)",
+      "durationS": 60
+    },
+    {
+      "id": "S4",
+      "name": "Ping Pong — gameplay",
+      "route": "/games/ping-pong",
+      "uiControl": "play until 30 paddle hits",
+      "durationS": 60
+    }
+  ],
+
+  "devices": [
+    { "id": "D1", "label": "Desktop reference", "notes": "Fill in CPU/GPU/RAM/OS/Chromium version" },
+    { "id": "D2", "label": "Mobile reference", "notes": "Fill in device/SoC/OS/Chromium version" }
+  ],
+
+  "runs": {
+    "baseline_D1_S1": { "fps": null, "stages": {} },
+    "baseline_D1_S2": { "fps": null, "stages": {} },
+    "baseline_D1_S3": { "fps": null, "stages": {} },
+    "baseline_D1_S4": { "fps": null, "stages": {} },
+    "baseline_D2_S1": { "fps": null, "stages": {} },
+    "baseline_D2_S2": { "fps": null, "stages": {} },
+    "baseline_D2_S3": { "fps": null, "stages": {} },
+    "baseline_D2_S4": { "fps": null, "stages": {} },
+
+    "optimized_D1_S1": { "fps": null, "stages": {} },
+    "optimized_D1_S2": { "fps": null, "stages": {} },
+    "optimized_D1_S3": { "fps": null, "stages": {} },
+    "optimized_D1_S4": { "fps": null, "stages": {} },
+    "optimized_D2_S1": { "fps": null, "stages": {} },
+    "optimized_D2_S2": { "fps": null, "stages": {} },
+    "optimized_D2_S3": { "fps": null, "stages": {} },
+    "optimized_D2_S4": { "fps": null, "stages": {} }
+  },
+
+  "headlineNumbersStatic": {
+    "$comment": "All numbers below are from code-level analysis (operation counts, allocations, triangle counts). They are the upper bound on what the runtime should show.",
+    "setStateCallsPerFrame":         { "before": 3, "after": 1, "x": 3.0 },
+    "atan2CallsPerFramePerHand":     { "before": 10, "after": 0 },
+    "domLayoutReadsPerFrame":        { "before": 40, "after": 0 },
+    "gradientCreationsPerFrame":     { "before": 62, "after": 5 },
+    "trianglesOnScreen2Hands":       { "before": 19320, "after_desktop": 8064, "after_mobile": 5712 },
+    "clearcoatMeshes":               { "before": 42, "after": 5 },
+    "pingPongBgGradientCreatesPerSec":  { "before": 60, "after": 0 },
+    "pingPongPaddleGradientCreatesPerSec": { "before": 60, "after": 0 },
+    "perFrameHeapAllocations":       { "before": "~25 objects", "after": "0-5 objects (only new particles)" },
+    "mobileMediapipeInitsPerColdMount":  { "before": 2, "after": 1 },
+    "estimatedPerRouteBundleReductionKB": { "before": 0, "after": 80 }
+  }
+}

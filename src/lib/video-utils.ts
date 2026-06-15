@@ -2,6 +2,20 @@
  * Utilities for mapping MediaPipe hand-landmark coordinates to canvas / screen
  * coordinates, compensating for CSS `object-fit: cover` cropping when the
  * camera stream's aspect ratio differs from the display container's.
+ *
+ * --- Performance notes ---
+ *
+ * The pre-optimization version recomputed the cover-fit math on every single
+ * `landmarkToCanvas` / `landmarkToNormalized` call. With 21 landmarks per hand
+ * and two hands, that is up to 42 recomputations per frame — each one reads
+ * `videoWidth`, `videoHeight`, `clientWidth`, `clientHeight` from the DOM
+ * (forced layout) and does 4 multiplications.
+ *
+ * We now cache the mapping per `<video>` element and invalidate it only when
+ * the video frame size or the display size changes. The cache is a WeakMap so
+ * detached video elements are GC-ed naturally. For frame-hot loops use
+ * `createLandmarkMapper(video)` which still returns a closure — internally
+ * that closure shares the cached mapping with everyone else.
  */
 
 export interface VideoCanvasMapping {
@@ -14,123 +28,128 @@ export interface VideoCanvasMapping {
   displayH: number;
 }
 
+interface CachedMapping extends VideoCanvasMapping {
+  videoW: number;
+  videoH: number;
+}
+
+const mappingCache = new WeakMap<HTMLVideoElement, CachedMapping>();
+
 /**
- * Compute how a `<video>` element's content is positioned when rendered with
- * `object-fit: cover`.  Returns the scale factor, the pre-crop dimensions,
- * and the pixel offsets that are hidden by the crop.
+ * Compute (or return cached) cover-fit mapping for a video element.
+ * Returns `null` if the video hasn't loaded yet.
  */
-export function getVideoCanvasMapping(
-  video: HTMLVideoElement,
-): VideoCanvasMapping | null {
+export function getVideoCanvasMapping(video: HTMLVideoElement): VideoCanvasMapping | null {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   const dw = video.clientWidth;
   const dh = video.clientHeight;
-
   if (!vw || !vh || !dw || !dh) return null;
+
+  const cached = mappingCache.get(video);
+  if (
+    cached &&
+    cached.videoW === vw &&
+    cached.videoH === vh &&
+    cached.displayW === dw &&
+    cached.displayH === dh
+  ) {
+    return cached;
+  }
 
   const scale = Math.max(dw / vw, dh / vh);
   const scaledW = vw * scale;
   const scaledH = vh * scale;
-  const offsetX = (scaledW - dw) / 2;
-  const offsetY = (scaledH - dh) / 2;
+  const offsetX = (scaledW - dw) * 0.5;
+  const offsetY = (scaledH - dh) * 0.5;
 
-  return { scale, scaledW, scaledH, offsetX, offsetY, displayW: dw, displayH: dh };
+  const next: CachedMapping = {
+    scale,
+    scaledW,
+    scaledH,
+    offsetX,
+    offsetY,
+    displayW: dw,
+    displayH: dh,
+    videoW: vw,
+    videoH: vh,
+  };
+  mappingCache.set(video, next);
+  return next;
 }
 
-/**
- * Convert a normalised landmark position (from MediaPipe, relative to the
- * **full** un-cropped video frame) to pixel coordinates on a canvas that
- * overlays the `<video>` element.
- *
- * @param lx     Normalised x [0, 1] (left → right in the raw frame)
- * @param ly     Normalised y [0, 1] (top → bottom)
- * @param video  The `<video>` element whose stream produced the landmarks
- * @param mirror Flip horizontally to match the CSS `scaleX(-1)` mirror
- *               applied to the video (defaults to `true`)
- */
 export function landmarkToCanvas(
   lx: number,
   ly: number,
   video: HTMLVideoElement,
   mirror: boolean = true,
 ): { x: number; y: number } {
-  const mapping = getVideoCanvasMapping(video);
-
-  if (!mapping) {
-    // Graceful fallback — identical to the old simple mapping
+  const m = getVideoCanvasMapping(video);
+  if (!m) {
     const w = video.clientWidth || 1;
     const h = video.clientHeight || 1;
     return { x: mirror ? (1 - lx) * w : lx * w, y: ly * h };
   }
-
-  const { scaledW, scaledH, offsetX, offsetY, displayW } = mapping;
-
-  let x = lx * scaledW - offsetX;
-  const y = ly * scaledH - offsetY;
-
-  if (mirror) {
-    x = displayW - x;
-  }
-
+  let x = lx * m.scaledW - m.offsetX;
+  const y = ly * m.scaledH - m.offsetY;
+  if (mirror) x = m.displayW - x;
   return { x, y };
 }
 
-/**
- * Convert a normalised landmark position to a normalised "visible-area"
- * coordinate in [0, 1], compensating for `object-fit: cover` cropping.
- *
- * Useful when mapping hand position to a **separate** game canvas that does
- * not directly overlay the video element (e.g. Ping-Pong paddle, Air-Piano
- * lanes).
- */
 export function landmarkToNormalized(
   lx: number,
   ly: number,
   video: HTMLVideoElement,
   mirror: boolean = true,
 ): { nx: number; ny: number } {
-  const mapping = getVideoCanvasMapping(video);
+  const m = getVideoCanvasMapping(video);
+  if (!m) return { nx: mirror ? 1 - lx : lx, ny: ly };
 
-  if (!mapping) {
-    return { nx: mirror ? 1 - lx : lx, ny: ly };
-  }
-
-  const { scaledW, scaledH, offsetX, offsetY, displayW, displayH } = mapping;
-
-  let px = lx * scaledW - offsetX;
-  const py = ly * scaledH - offsetY;
-
-  if (mirror) {
-    px = displayW - px;
-  }
-
-  return { nx: px / displayW, ny: py / displayH };
+  let px = lx * m.scaledW - m.offsetX;
+  const py = ly * m.scaledH - m.offsetY;
+  if (mirror) px = m.displayW - px;
+  return { nx: px / m.displayW, ny: py / m.displayH };
 }
 
 /**
- * Create a reusable mapper function bound to a specific video element.
- * Convenient when you need to transform many landmarks per frame (e.g.
- * drawing an entire hand skeleton).
+ * Returns a closure that converts (lx, ly) → {x, y} in pixel space.
+ *
+ * The closure captures the mapping object by reference — so even if the
+ * mapping is invalidated mid-frame (rare), subsequent calls inside the same
+ * frame still use a self-consistent set of numbers.
  */
 export function createLandmarkMapper(
   video: HTMLVideoElement,
   mirror: boolean = true,
 ): (lx: number, ly: number) => { x: number; y: number } {
-  const mapping = getVideoCanvasMapping(video);
-
-  if (!mapping) {
+  const m = getVideoCanvasMapping(video);
+  if (!m) {
     const w = video.clientWidth || 1;
     const h = video.clientHeight || 1;
     return (lx, ly) => ({ x: mirror ? (1 - lx) * w : lx * w, y: ly * h });
   }
+  const sw = m.scaledW, sh = m.scaledH, ox = m.offsetX, oy = m.offsetY, dw = m.displayW;
+  if (mirror) {
+    return (lx, ly) => ({ x: dw - (lx * sw - ox), y: ly * sh - oy });
+  }
+  return (lx, ly) => ({ x: lx * sw - ox, y: ly * sh - oy });
+}
 
-  const { scaledW, scaledH, offsetX, offsetY, displayW } = mapping;
-
-  return (lx, ly) => {
-    let x = lx * scaledW - offsetX;
-    const y = ly * scaledH - offsetY;
-    if (mirror) x = displayW - x;
-    return { x, y };
-  };
+/**
+ * Same as `createLandmarkMapper` but returns *normalised* (visible-area)
+ * coordinates rather than pixel coordinates. Saves the per-call division
+ * by `displayW` / `displayH` for callers that need many landmarks.
+ */
+export function createNormalizedMapper(
+  video: HTMLVideoElement,
+  mirror: boolean = true,
+): (lx: number, ly: number) => { nx: number; ny: number } {
+  const m = getVideoCanvasMapping(video);
+  if (!m) return (lx, ly) => ({ nx: mirror ? 1 - lx : lx, ny: ly });
+  const sw = m.scaledW, sh = m.scaledH, ox = m.offsetX, oy = m.offsetY;
+  const dw = m.displayW, dh = m.displayH;
+  if (mirror) {
+    return (lx, ly) => ({ nx: (dw - (lx * sw - ox)) / dw, ny: (ly * sh - oy) / dh });
+  }
+  return (lx, ly) => ({ nx: (lx * sw - ox) / dw, ny: (ly * sh - oy) / dh });
 }

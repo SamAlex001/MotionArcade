@@ -3,14 +3,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useHandTracking } from '@/hooks/use-hand-tracking';
 import { Loader, Trophy, Zap } from 'lucide-react';
-import type { Landmark } from '@mediapipe/tasks-vision';
 import { landmarkToNormalized } from '@/lib/video-utils';
 
 // Constants
 const PADDLE_WIDTH = 120;
 const PADDLE_HEIGHT = 15;
 const BALL_RADIUS = 12;
-const BALL_SPEED = 5;
+const BALL_SPEED_PPS = 200; // pixels per second (frame-rate independent)
 const MAX_PARTICLES = 100; // Limit particles for performance
 const TRAIL_LENGTH = 5; // Reduced from 10 for better performance
 
@@ -25,13 +24,16 @@ interface Particle {
 }
 
 export default function PingPongClient() {
-  const { videoRef, landmarks, isLoading, error, startVideo } = useHandTracking();
+  const { videoRef, landmarksRef, isLoading, error, startVideo } = useHandTracking();
   const gameCanvasRef = useRef<HTMLCanvasElement>(null);
   const handTrackingCanvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number>();
-  const landmarksRef = useRef<Landmark[][]>();
   const lastFrameTime = useRef<number>(0);
-  const frameCount = useRef<number>(0);
+
+  // Cached gradients (rebuilt only on canvas resize / combo change).
+  const cachedBgGradient = useRef<CanvasGradient | null>(null);
+  const cachedBgKey      = useRef<string>('');
+  const cachedPaddleGradients = useRef<Record<string, CanvasGradient>>({});
 
   const [score, setScore] = useState(0);
   const [highScore, setHighScore] = useState(0);
@@ -48,14 +50,11 @@ export default function PingPongClient() {
   const ball = useRef({
     x: 0,
     y: 0,
-    vx: 5,
-    vy: 5,
+    vx: BALL_SPEED_PPS,
+    vy: BALL_SPEED_PPS,
   });
   const playerPaddle = useRef({ x: 0 });
-
-  useEffect(() => {
-    landmarksRef.current = landmarks;
-  }, [landmarks]);
+  const targetPaddleX = useRef<number>(0);
 
   useEffect(() => {
     startVideo();
@@ -72,13 +71,15 @@ export default function PingPongClient() {
     ballTrail.current = [];
     ball.current.x = gameCanvas.width / 2;
     ball.current.y = gameCanvas.height / 2;
-    ball.current.vx = BALL_SPEED * (Math.random() > 0.5 ? 1 : -1);
-    ball.current.vy = -BALL_SPEED;
+    ball.current.vx = BALL_SPEED_PPS * (Math.random() > 0.5 ? 1 : -1);
+    ball.current.vy = -BALL_SPEED_PPS;
     playerPaddle.current.x = gameCanvas.width / 2 - PADDLE_WIDTH / 2;
+    targetPaddleX.current = playerPaddle.current.x;
+    lastFrameTime.current = 0;
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
     }
-    gameLoop();
+    animationFrameRef.current = requestAnimationFrame(gameLoop);
   };
 
   const createParticles = (x: number, y: number, color: string, count: number = 10) => {
@@ -100,29 +101,30 @@ export default function PingPongClient() {
     }
   };
 
-  const gameLoop = () => {
-    update();
+  const gameLoop = (timestamp: number = performance.now()) => {
+    const dt = lastFrameTime.current > 0
+      ? Math.min((timestamp - lastFrameTime.current) / 1000, 0.05)
+      : 1 / 60;
+    lastFrameTime.current = timestamp;
+    update(dt);
     draw();
     animationFrameRef.current = requestAnimationFrame(gameLoop);
   };
 
-  const update = () => {
+  const update = (dt: number) => {
     if (gameOver) return;
     const gameCanvas = gameCanvasRef.current;
     if (!gameCanvas) return;
 
-    // Throttle updates for better performance - only update every other frame
-    frameCount.current++;
-    
     // Update ball trail (reduced length for performance)
     ballTrail.current.unshift({ x: ball.current.x, y: ball.current.y, alpha: 1 });
     if (ballTrail.current.length > TRAIL_LENGTH) {
       ballTrail.current.pop();
     }
 
-    // Move ball
-    ball.current.x += ball.current.vx;
-    ball.current.y += ball.current.vy;
+    // Move ball (delta-time scaled so speed is frame-rate independent)
+    ball.current.x += ball.current.vx * dt;
+    ball.current.y += ball.current.vy * dt;
 
     // Ball collision with walls
     if (ball.current.x - BALL_RADIUS < 0 || ball.current.x + BALL_RADIUS > gameCanvas.width) {
@@ -170,26 +172,33 @@ export default function PingPongClient() {
       createParticles(ball.current.x, gameCanvas.height, '#ef4444', 20); // Reduced particles
     }
 
-    // Update particles
-    particles.current = particles.current.filter((p) => {
+    // Update particles — in-place compaction, no new array.
+    const ps = particles.current;
+    let w = 0;
+    for (let r = 0; r < ps.length; r++) {
+      const p = ps[r];
       p.x += p.vx;
       p.y += p.vy;
-      p.vy += 0.1; // gravity
-      p.life -= 0.03; // Faster decay for better performance
-      return p.life > 0;
-    });
+      p.vy += 0.1;
+      p.life -= 0.03;
+      if (p.life > 0) ps[w++] = p;
+    }
+    ps.length = w;
 
-    // Move paddle with hand (throttled to every frame now, no extra processing)
+    // Update paddle target from hand tracking (inference may run every 2-4 frames)
     if (landmarksRef.current && landmarksRef.current.length > 0) {
       const video = videoRef.current;
       const hand = landmarksRef.current[0];
-      const indexFinger = hand[8]; // Using index finger tip (landmark 8) for more precise control
+      const indexFinger = hand[8];
       if (indexFinger && video) {
         const { nx } = landmarkToNormalized(indexFinger.x, 0, video);
         const newPaddleX = nx * gameCanvas.width - PADDLE_WIDTH / 2;
-        playerPaddle.current.x = Math.max(0, Math.min(newPaddleX, gameCanvas.width - PADDLE_WIDTH));
+        targetPaddleX.current = Math.max(0, Math.min(newPaddleX, gameCanvas.width - PADDLE_WIDTH));
       }
     }
+    // Lerp paddle toward target for smooth motion even between inference frames
+    const alpha = 1 - Math.pow(0.6, dt * 60); // ~40% per frame at 60fps
+    playerPaddle.current.x += (targetPaddleX.current - playerPaddle.current.x) * alpha;
   };
 
   const draw = () => {
@@ -198,11 +207,17 @@ export default function PingPongClient() {
     const ctx = gameCanvas.getContext('2d');
     if (!ctx) return;
 
-    // Create gradient background (cached would be better but this is simple)
-    const gradient = ctx.createLinearGradient(0, 0, 0, gameCanvas.height);
-    gradient.addColorStop(0, '#0f172a');
-    gradient.addColorStop(1, '#1e293b');
-    ctx.fillStyle = gradient;
+    // Cached background gradient — only rebuilt on resize.
+    const bgKey = `${gameCanvas.width}x${gameCanvas.height}`;
+    if (cachedBgKey.current !== bgKey || !cachedBgGradient.current) {
+      const g = ctx.createLinearGradient(0, 0, 0, gameCanvas.height);
+      g.addColorStop(0, '#0f172a');
+      g.addColorStop(1, '#1e293b');
+      cachedBgGradient.current = g;
+      cachedBgKey.current = bgKey;
+      cachedPaddleGradients.current = {}; // paddle gradients depend on dims
+    }
+    ctx.fillStyle = cachedBgGradient.current!;
     ctx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
 
     // Simplified grid pattern (draw fewer lines)
@@ -248,27 +263,37 @@ export default function PingPongClient() {
     }
     ctx.globalAlpha = 1;
 
-    // Draw paddle with simplified gradient
-    const paddleGradient = ctx.createLinearGradient(
-      playerPaddle.current.x,
-      gameCanvas.height - PADDLE_HEIGHT,
-      playerPaddle.current.x + PADDLE_WIDTH,
-      gameCanvas.height
-    );
-    
-    // Paddle color changes based on combo (simplified - no heavy shadows)
-    if (combo > 5) {
-      paddleGradient.addColorStop(0, '#fbbf24');
-      paddleGradient.addColorStop(0.5, '#f59e0b');
-      paddleGradient.addColorStop(1, '#fbbf24');
-    } else if (combo > 2) {
-      paddleGradient.addColorStop(0, '#10b981');
-      paddleGradient.addColorStop(0.5, '#059669');
-      paddleGradient.addColorStop(1, '#10b981');
-    } else {
-      paddleGradient.addColorStop(0, '#60a5fa');
-      paddleGradient.addColorStop(0.5, '#3b82f6');
-      paddleGradient.addColorStop(1, '#60a5fa');
+    // Paddle gradient — three color tiers cached by x position bucket.
+    // The gradient direction is horizontal across the paddle, so it shifts
+    // with the paddle's x. We rebuild only when the bucket changes.
+    const tier = combo > 5 ? 'gold' : combo > 2 ? 'green' : 'blue';
+    const xBucket = Math.round(playerPaddle.current.x / 8) * 8;
+    const paddleKey = `${tier}:${xBucket}`;
+    let paddleGradient = cachedPaddleGradients.current[paddleKey];
+    if (!paddleGradient) {
+      paddleGradient = ctx.createLinearGradient(
+        xBucket,
+        gameCanvas.height - PADDLE_HEIGHT,
+        xBucket + PADDLE_WIDTH,
+        gameCanvas.height,
+      );
+      if (tier === 'gold') {
+        paddleGradient.addColorStop(0, '#fbbf24');
+        paddleGradient.addColorStop(0.5, '#f59e0b');
+        paddleGradient.addColorStop(1, '#fbbf24');
+      } else if (tier === 'green') {
+        paddleGradient.addColorStop(0, '#10b981');
+        paddleGradient.addColorStop(0.5, '#059669');
+        paddleGradient.addColorStop(1, '#10b981');
+      } else {
+        paddleGradient.addColorStop(0, '#60a5fa');
+        paddleGradient.addColorStop(0.5, '#3b82f6');
+        paddleGradient.addColorStop(1, '#60a5fa');
+      }
+      // Cap cache to avoid unbounded growth.
+      const keys = Object.keys(cachedPaddleGradients.current);
+      if (keys.length > 80) delete cachedPaddleGradients.current[keys[0]];
+      cachedPaddleGradients.current[paddleKey] = paddleGradient;
     }
 
     ctx.fillStyle = paddleGradient;
@@ -276,7 +301,7 @@ export default function PingPongClient() {
       playerPaddle.current.x,
       gameCanvas.height - PADDLE_HEIGHT,
       PADDLE_WIDTH,
-      PADDLE_HEIGHT
+      PADDLE_HEIGHT,
     );
 
     // Draw ball with simplified rendering
