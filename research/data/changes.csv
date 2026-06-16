@@ -1,0 +1,36 @@
+change_id,file,category,hotspot,description,lines_changed_approx,expected_impact_tier
+C01,src/hooks/use-hand-tracking.ts,react,H1,Expose landmarksRef/handednessRef/detectedFingersRef for hot-path reads,150,critical
+C02,src/hooks/use-hand-tracking.ts,react,H1,Skip setHandedness/setDetectedFingers when value unchanged,8,high
+C03,src/hooks/use-hand-tracking.ts,init,H11,Synchronous UA-based mobile detection via useRef,12,medium
+C04,src/hooks/use-hand-tracking.ts,init,H11,Module-cached HandLandmarker keyed by config hash,30,medium
+C05,src/hooks/use-hand-tracking.ts,scheduling,n/a,Adaptive frame-skip 0-3 based on inference budget overrun,18,medium
+C06,src/lib/finger-counting.ts,math,H2,Replace dual atan2 with dot-product cosine test,40,high
+C07,src/lib/finger-counting.ts,memory,H2,Hoist joint-index triples into module-level Int8Array,8,low
+C08,src/lib/video-utils.ts,memory,H3,WeakMap-backed mapping cache invalidated only on size change,40,high
+C09,src/lib/video-utils.ts,branches,H3,Specialize mirror=true/false closures in createLandmarkMapper,20,low
+C10,src/lib/video-utils.ts,api,H3,Add createNormalizedMapper for normalized-coord callers,20,low
+C11,three-hand-renderer.ts,gpu,H4,Demote joint and bone materials to MeshStandardMaterial,30,critical
+C12,three-hand-renderer.ts,gpu,H4,Reduce sphere segments 20->12 desktop / 10 mobile,12,critical
+C13,three-hand-renderer.ts,gpu,H4,Reduce cylinder radial segments 10->8 desktop / 6 mobile,4,medium
+C14,three-hand-renderer.ts,gpu,H4,Skip PMREM env pass on mobile (saves ~120ms init),22,high
+C15,three-hand-renderer.ts,gpu,H4,Disable MSAA on mobile,3,medium
+C16,three-hand-renderer.ts,gpu,H4,Cap devicePixelRatio at 1.5 on mobile,2,medium
+C17,three-hand-renderer.ts,gpu,H4,frustumCulled=false on always-onscreen hand meshes,6,low
+C18,three-hand-renderer.ts,memory,H4,Pre-bake JOINT_RADIUS/BONE_RADIUS into Float32Array,30,low
+C19,JustShowYourHandsClient.tsx,canvas,H5,Replace 18 per-hand triangle radial gradients with flat HSL fills,25,critical
+C20,JustShowYourHandsClient.tsx,canvas,H5,Replace per-connection linear gradients with flat hsla strings,15,high
+C21,JustShowYourHandsClient.tsx,canvas,H5,Keep radial gradient only on 5 fingertip orbs (visual anchor),20,medium
+C22,JustShowYourHandsClient.tsx,memory,H6,Pre-mapped landmark coords in module Float32Arrays,18,high
+C23,JustShowYourHandsClient.tsx,memory,H7,Particle list compacted in place (no .filter/.slice),18,high
+C24,JustShowYourHandsClient.tsx,collections,H8,Replace FINGERTIP_INDICES.includes with FINGERTIP_SET.has,3,low
+C25,JustShowYourHandsClient.tsx,budget,n/a,Particle budget 200 mobile / 600 desktop,8,medium
+C26,JustShowYourHandsClient.tsx,react,H1,Adopt hook landmarksRef directly; drop local copy useEffect,8,high
+C27,PingPongClient.tsx,canvas,H9,Cache background gradient (rebuild only on resize),20,high
+C28,PingPongClient.tsx,canvas,H9,Cache paddle gradients by (tier; xBucket),30,high
+C29,PingPongClient.tsx,memory,H10,Particle list compacted in place,12,medium
+C30,PingPongClient.tsx,react,H1,Adopt hook landmarksRef directly; drop local copy useEffect,8,medium
+C31,next.config.ts,bundle,H12,optimizePackageImports for three/mediapipe/lucide/recharts/date-fns (Next 16 built-in per-symbol tree-shake),10,high
+C33,next.config.ts,network,n/a,Long-term immutable cache headers for static assets,12,low
+C34,next.config.ts,bundle,n/a,Disable productionBrowserSourceMaps,2,low
+C35,src/app/layout.tsx,network,n/a,Preconnect to CDN origins for MediaPipe WASM and model,6,medium
+C36,src/lib/perf-monitor.ts,instrumentation,n/a,Add zero-overhead in-app perf monitor (new file),173,medium

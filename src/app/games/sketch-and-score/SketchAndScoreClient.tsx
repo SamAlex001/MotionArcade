@@ -39,6 +39,7 @@ export default function SketchAndScoreClient() {
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null); // Canvas for UI overlays
   const lastPosition = useRef<{ x: number, y: number } | null>(null);
   const midPointRef = useRef<{ x: number, y: number } | null>(null);
+  const tenFingersHeldRef = useRef(false);
   const isMobile = useIsMobile();
   
   const { toast } = useToast();
@@ -118,6 +119,7 @@ export default function SketchAndScoreClient() {
     }
     lastPosition.current = null;
     midPointRef.current = null;
+    tenFingersHeldRef.current = false;
   }, [getDrawingContext]);
 
   const handleSubmit = async () => {
@@ -221,17 +223,22 @@ export default function SketchAndScoreClient() {
       overlayCtx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
     }
     
-    // Prioritize the 10-finger clear gesture for desktop
+    // Prioritize the 10-finger clear gesture for desktop — edge-triggered so it
+    // fires only once per gesture hold, not every frame while fingers are up.
     if (!isMobile && detectedFingers === 10) {
-        if (gameState === 'GET_READY') {
-          setCountdown(COUNTDOWN_SECONDS);
-          setGameState('COUNTDOWN');
-        } else if (gameState === 'DRAWING') {
-          clearCanvas();
-          toast({ title: "Canvas Cleared!" });
+        if (!tenFingersHeldRef.current) {
+            tenFingersHeldRef.current = true;
+            if (gameState === 'GET_READY') {
+              setCountdown(COUNTDOWN_SECONDS);
+              setGameState('COUNTDOWN');
+            } else if (gameState === 'DRAWING') {
+              clearCanvas();
+              toast({ title: "Canvas Cleared!" });
+            }
         }
-        return; // Important: Stop processing further gestures for this frame
+        return;
     }
+    tenFingersHeldRef.current = false;
 
 
     let drawingHandLandmarks: any[] | null = null;

@@ -29,7 +29,25 @@ export default function MathChallenge2Client() {
   const { toast, dismiss } = useToast();
   const toastIdRef = useRef<string | null>(null);
   const isMobile = useIsMobile();
-  const popAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  const playPopSound = useCallback(() => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new AudioContext();
+    }
+    const ctx = audioCtxRef.current;
+    if (ctx.state === 'suspended') ctx.resume();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(800, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(300, ctx.currentTime + 0.08);
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.12);
+  }, []);
   const bubbleRefs = useRef<(HTMLDivElement | null)[]>([]);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const pointerRef = useRef<SVGSVGElement | null>(null);
@@ -95,17 +113,6 @@ export default function MathChallenge2Client() {
 
 
   const startGame = useCallback(async () => {
-    // Attempt to play and pause the audio to unlock it for later.
-    // This is a common workaround for browser autoplay restrictions.
-    if (popAudioRef.current) {
-      popAudioRef.current.muted = true;
-      popAudioRef.current.play().then(() => {
-        popAudioRef.current?.pause();
-        popAudioRef.current!.muted = false;
-        popAudioRef.current!.currentTime = 0;
-      }).catch(e => console.error("Audio unlock failed:", e));
-    }
-
     setScore(0);
     setGameState('LOADING');
     await startVideo();
@@ -172,12 +179,8 @@ export default function MathChallenge2Client() {
         const distance = Math.sqrt(Math.pow(tipX - bubbleX, 2) + Math.pow(tipY - bubbleY, 2));
         
         if (distance < bubbleRadius) {
-            // Pop!
-            if (popAudioRef.current) {
-              popAudioRef.current.currentTime = 0;
-              popAudioRef.current.play().catch(e => console.error("Audio play failed:", e));
-            }
-            
+            playPopSound();
+
             setBubbles(prevBubbles => {
                 const newBubbles = [...prevBubbles];
                 if (newBubbles[index] && !newBubbles[index].popped) {
@@ -190,7 +193,7 @@ export default function MathChallenge2Client() {
         }
     });
 
-  }, [landmarks, gameState, bubbles, currentProblem, handleAnswer]);
+  }, [landmarks, gameState, bubbles, currentProblem, handleAnswer, playPopSound]);
 
 
   const renderGameState = () => {
@@ -316,7 +319,6 @@ export default function MathChallenge2Client() {
   return (
     <div className="container mx-auto px-4 py-4 lg:py-8 flex flex-col items-center justify-start lg:justify-center min-h-[calc(100vh-56px)]">
       {renderGameState()}
-      <audio ref={popAudioRef} src="/pop.mp3" preload="auto"></audio>
     </div>
   );
 }
