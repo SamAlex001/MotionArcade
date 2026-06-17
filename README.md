@@ -217,6 +217,13 @@ This project is private and part of an academic final year project.
 **kravitexx**
 - GitHub: [@kravitexx](https://github.com/kravitexx)
 
+**SamAlex001**
+- GitHub: [@SamAlex001](https://github.com/SamAlex001)
+
+**THEKIRA001**
+- GitHub: [@THEKIRA001](https://github.com/THEKIRA001)
+
+
 ##  Acknowledgments
 
 - MediaPipe team for hand tracking technology
