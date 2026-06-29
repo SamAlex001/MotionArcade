@@ -1,0 +1,802 @@
+================================================================================
+MOTIONARCADE — SYSTEM ARCHITECTURE DIAGRAMS
+MediaPipe × Gemini AI Integration
+================================================================================
+View in any monospace font: Consolas, Cascadia Code, Courier New, SF Mono.
+Each diagram is self-contained and labelled.
+
+Box-drawing legend:
+  ─ │           Thin horizontal / vertical
+  ┌ ┐ └ ┘       Thin corners
+  ├ ┤ ┬ ┴ ┼     Thin junctions
+  ╔ ╗ ╚ ╝ ║ ═   Double-line (zone boundaries)
+  → ← ↑ ↓       Direction arrows
+  ▶ ◀ ▲ ▼       Filled arrowheads
+  █ ▐▌           Solid block (timeline bars)
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+  A.  Three-Layer System Overview
+  B.  Timing — How 60fps and Async AI Coexist
+  C.  The predictWebcam() Inference Loop  (flowchart)
+  D.  Dual-Track Data Access — Refs vs. State
+  E.  Finger Counting Algorithm  (cosine similarity)
+  F.  Video-to-Canvas Coordinate Mapping  (object-fit: cover)
+  G.  Quiz Quest State Machine
+  H.  Sketch & Score Vision Pipeline  (the special case)
+  I.  Singleton Caching — MediaPipe Initialization
+  J.  Adaptive Frame Skipping
+  K.  Package & Runtime Boundaries
+  L.  Data Structures at Each Layer Boundary
+  M.  Per-Game System Usage Matrix
+  N.  Network & Execution Boundary Map
+
+
+════════════════════════════════════════════════════════════════════════════════
+A.  THREE-LAYER SYSTEM OVERVIEW
+════════════════════════════════════════════════════════════════════════════════
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  LAYER 1 — BROWSER  (WebAssembly + React)                      [30–60 fps] ║
+║                                                                              ║
+║  ┌─────────────┐   raw video    ┌────────────────────────────────────────┐  ║
+║  │   Camera    │───────────────▶│      MediaPipe WASM  (GPU delegate)    │  ║
+║  │getUserMedia │   frames       │  HandLandmarker.detectForVideo()       │  ║
+║  └─────────────┘                │  • float16 neural network model        │  ║
+║                                 │  • 21 landmarks × up to 2 hands        │  ║
+║                                 │  • normalized coords  x,y ∈ [0,1]      │  ║
+║                                 └───────────────────┬────────────────────┘  ║
+║                                                     │                        ║
+║                                        Landmark[][] + Handedness[][]         ║
+║                                        countFingers() → integer 0–10        ║
+║                                                     │                        ║
+║                                 ┌───────────────────▼────────────────────┐  ║
+║                                 │          useHandTracking()  Hook        │  ║
+║                                 │                                         │  ║
+║                                 │  ┌──────────────────────────────────┐  │  ║
+║                                 │  │  HOT PATH — updated every frame  │  │  ║
+║                                 │  │  landmarksRef.current            │  │  ║
+║                                 │  │  handednessRef.current           │  │  ║
+║                                 │  │  detectedFingersRef.current      │  │  ║
+║                                 │  │  (zero React overhead)           │  │  ║
+║                                 │  └──────────────────────────────────┘  │  ║
+║                                 │  ┌──────────────────────────────────┐  │  ║
+║                                 │  │  THROTTLED STATE — 20 Hz max     │  │  ║
+║                                 │  │  landmarks        (useEffect)    │  │  ║
+║                                 │  │  detectedFingers  (useEffect)    │  │  ║
+║                                 │  └──────────────────────────────────┘  │  ║
+║                                 └───────────────────┬────────────────────┘  ║
+║                                                     │                        ║
+║                         ┌───────────────────────────▼──────────────────┐   ║
+║                         │         Game Component  (Orchestrator)        │   ║
+║                         │                                               │   ║
+║                         │  ┌─────────────────┐  ┌──────────────────┐  │   ║
+║                         │  │  rAF loop        │  │  useEffect       │  │   ║
+║                         │  │  reads           │  │  reads           │  │   ║
+║                         │  │  landmarksRef    │  │  detectedFingers │  │   ║
+║                         │  │  → canvas draw   │  │  state           │  │   ║
+║                         │  │  → collision     │  │  → state machine │  │   ║
+║                         │  └─────────────────┘  └────────┬─────────┘  │   ║
+║                         └──────────────────────────────────┼────────────┘   ║
+╚══════════════════════════════════════════════════════════════╪══════════════╝
+                                                               │
+                                     async / await  (Next.js Server Action)
+                                     Fires on game state transition ONLY.
+                                     NOT every frame. Roughly 1 per 12s.
+                                                               │
+╔══════════════════════════════════════════════════════════════▼══════════════╗
+║  LAYER 3 — SERVER  (Next.js  'use server')              [async, on demand] ║
+║                                                                              ║
+║  ┌────────────────────────────────────────────────────────────────────────┐ ║
+║  │                         Genkit  Framework                               │ ║
+║  │                                                                         │ ║
+║  │  ┌─────────────────┐  ┌────────────────┐  ┌──────────────────────┐    │ ║
+║  │  │ generateQuiz    │  │ generateMath   │  │ generateShapeToDraw  │    │ ║
+║  │  │ Question()      │  │ Problem2()     │  │ evaluatePlayer       │    │ ║
+║  │  │                 │  │                │  │ Drawing()  ← VISION  │    │ ║
+║  │  │ IN:             │  │ IN:            │  │                      │    │ ║
+║  │  │ score, subjects │  │ difficulty,    │  │ IN: shapeToDraw,     │    │ ║
+║  │  │                 │  │ score          │  │     drawingDataUri   │    │ ║
+║  │  │ OUT:            │  │                │  │     (base64 PNG)     │    │ ║
+║  │  │ question,       │  │ OUT:           │  │                      │    │ ║
+║  │  │ options[4],     │  │ problem,       │  │ OUT: isMatch,        │    │ ║
+║  │  │ correctIdx 0–3  │  │ options[4–6],  │  │      feedback string │    │ ║
+║  │  │                 │  │ correctAnswer  │  │                      │    │ ║
+║  │  └────────┬────────┘  └───────┬────────┘  └──────────┬───────────┘    │ ║
+║  └───────────┼───────────────────┼─────────────────────────┼──────────────┘ ║
+║              └───────────────────┴─────────────────────────┘                ║
+║                                          │  HTTPS API call                   ║
+║              ┌───────────────────────────▼───────────────────────────────┐  ║
+║              │          Gemini 2.5 Flash Lite  (Google AI)                │  ║
+║              │    text generation  +  structured output  +  vision        │  ║
+║              └───────────────────────────────────────────────────────────┘  ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+════════════════════════════════════════════════════════════════════════════════
+B.  TIMING — HOW 60 FPS AND ASYNC AI COEXIST
+════════════════════════════════════════════════════════════════════════════════
+
+  TIME ──────────────────────────────────────────────────────────────────────▶
+       0         250ms        500ms        750ms       1000ms       1250ms
+
+  MediaPipe
+  inference   ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌ ▐█▌
+  (~10ms ea)  each block = one detectForVideo() — runs continuously, always
+
+  landmarksRef
+  updated:    ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑
+              every frame — zero React overhead, game reads this in rAF
+
+  detectedFingers
+  state:      ↑                   ↑                             ↑
+              only fires when the integer finger count changes
+
+  landmarks
+  state:      ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑   ↑
+              20 Hz heartbeat (every 50ms) — drives canvas useEffect
+
+  Gemini AI   ├───────────────────────────────────────────────────┤
+  round-trip  request sent ~0ms                  response ~1100ms
+  (~800–1500ms)      (state = LOADING_PROBLEM, spinner shown to user)
+
+  Game state  PLAYING ────────── HOLDING ──── FEEDBACK ── LOADING ── PLAYING
+                                  (3s hold)    (2s)        (AI wait)
+                                  ^                        ^
+                                  gesture detected         question received
+
+  KEY INSIGHT:  While Gemini awaits, the MediaPipe loop continues at
+  full speed — 60 frames of inference fire during a 1-second AI call.
+  The two clocks are completely independent.
+
+
+════════════════════════════════════════════════════════════════════════════════
+C.  THE predictWebcam() INFERENCE LOOP
+════════════════════════════════════════════════════════════════════════════════
+
+  requestAnimationFrame fires
+           │
+           ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  Guard checks                                           │
+  │  video element ready?  srcObject exists?                │
+  │  HandLandmarker initialized?  readyState >= 2?          │
+  └──────────────────┬──────────────────────────────────────┘
+                     │ all pass
+                     ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  Adaptive frame-skip check                              │
+  │  skip = (isMobile ? 1 : 0) + skipFramesRef.current     │
+  │  if (frameCount % (skip + 1) !== 0)  →  SKIP           │
+  └──────────────────┬─────────────────┬───────────────────┘
+                     │ run              │ skip
+                     │                 └──▶  schedule next rAF → return
+                     ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  perf.mark('inference')                                 │
+  │  startTimeMs = performance.now()                        │
+  │  results = landmarker.detectForVideo(video, startTimeMs)│
+  │  dt = performance.now() - startTimeMs                   │
+  │  perf.measure('inference')                              │
+  └──────────────────┬──────────────────────────────────────┘
+                     │
+                     ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  Adapt skip count                                       │
+  │  budget = isMobile ? 33ms : 16.7ms                     │
+  │  dt > budget × 1.5  →  skipFrames++  (cap 3)           │
+  │  dt < budget × 0.6  →  skipFrames--  (floor 0)         │
+  └──────────────────┬──────────────────────────────────────┘
+                     │
+                     ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  Update HOT PATH REFS  (zero React overhead)            │
+  │  landmarksRef.current  = results.landmarks              │
+  │  handednessRef.current = results.handedness             │
+  │  detectedFingersRef.current = countFingers(lm, hd)      │
+  └──────────────────┬──────────────────────────────────────┘
+                     │
+                     ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  Throttled React state updates                          │
+  │                                                         │
+  │  if (handCountChanged)                                  │
+  │    → setLandmarks()   setHandedness()                   │
+  │    → reset heartbeat timer                              │
+  │  else if (50ms heartbeat due)                           │
+  │    → setLandmarks()                                     │
+  │                                                         │
+  │  if (fingerCountChanged)                                │
+  │    → setDetectedFingers()                               │
+  └──────────────────┬──────────────────────────────────────┘
+                     │
+                     ▼
+         requestAnimationFrame(predictWebcam)
+
+
+════════════════════════════════════════════════════════════════════════════════
+D.  DUAL-TRACK DATA ACCESS — REFS vs. STATE
+════════════════════════════════════════════════════════════════════════════════
+
+  MediaPipe result arrives every ~16ms
+                    │
+       ┌────────────┴─────────────┐
+       │                          │
+       ▼                          ▼
+  ┌──────────────────┐    ┌───────────────────────────┐
+  │  REFS (hot path) │    │  REACT STATE (throttled)  │
+  │                  │    │                           │
+  │  landmarksRef    │    │  landmarks                │
+  │  handednessRef   │    │  handedness               │
+  │  detectedFingers │    │  detectedFingers          │
+  │  Ref             │    │                           │
+  │                  │    │  Updates on:              │
+  │  Updates:        │    │  • hand count change      │
+  │  EVERY frame     │    │  • finger count change    │
+  │  ~60× / second   │    │  • 50ms heartbeat         │
+  │                  │    │  ≈ 2–20× / second         │
+  └──────┬───────────┘    └───────────┬───────────────┘
+         │                            │
+         ▼                            ▼
+  ┌──────────────────┐    ┌───────────────────────────┐
+  │  Read in rAF     │    │  Read in useEffect        │
+  │                  │    │                           │
+  │  • Canvas draw   │    │  • Answer selection       │
+  │  • Collision     │    │  • Game state machine     │
+  │    detection     │    │  • Canvas overlay render  │
+  │  • Paddle pos    │    │  • Hand skeleton UI       │
+  │                  │    │                           │
+  │  Cost: ~0 ns     │    │  Cost: React re-render    │
+  │  (pointer deref) │    │  (diff, layout, effects)  │
+  └──────────────────┘    └───────────────────────────┘
+
+  WHY TWO TRACKS?
+  Calling setState 60× per second triggered React's "Maximum update
+  depth exceeded" in the original implementation. Refs bypass React's
+  scheduler entirely — always fresh, zero cost.
+
+
+════════════════════════════════════════════════════════════════════════════════
+E.  FINGER COUNTING ALGORITHM  (cosine similarity)
+════════════════════════════════════════════════════════════════════════════════
+
+  GEOMETRY — side view of one finger:
+
+         EXTENDED                      CURLED
+         ────────                      ──────
+           [c] TIP                       ──[a] MCP
+             │                          /
+        u ↑ [b] PIP ↓ v             [b] PIP
+             │                            \
+           [a] MCP                         [c] TIP
+
+    u = a − b   v = c − b
+    Extended: u and v are nearly opposite → cos ≈ −1.0
+    Curled:   u and v are at an angle     → cos ≈ +0.5
+
+    cos(angle) = dot(u,v) / (|u| × |v|)
+
+  THRESHOLDS:
+    Regular fingers:  cos < −0.9397  (angle > 160°)  →  EXTENDED
+    Thumb:            cos < −0.8660  (angle > 150°)  →  EXTENDED
+
+  LANDMARK INDEX TABLE:
+  ┌───────────┬──────────────────────┬───────┬───────┬──────┬────────────┐
+  │  Finger   │  Triple (a, b, c)    │   a   │   b   │   c  │ Threshold  │
+  ├───────────┼──────────────────────┼───────┼───────┼──────┼────────────┤
+  │  Index    │  MCP → PIP → Tip     │   5   │   6   │   8  │  −0.9397   │
+  │  Middle   │  MCP → PIP → Tip     │   9   │  10   │  12  │  −0.9397   │
+  │  Ring     │  MCP → PIP → Tip     │  13   │  14   │  16  │  −0.9397   │
+  │  Pinky    │  MCP → PIP → Tip     │  17   │  18   │  20  │  −0.9397   │
+  │  Thumb    │  CMC → MCP → IP      │   1   │   2   │   3  │  −0.8660   │
+  └───────────┴──────────────────────┴───────┴───────┴──────┴────────────┘
+
+  PERFORMANCE vs. atan2 (original approach):
+  ┌────────────────────────────┬─────────────┬──────────────────────────┐
+  │  Method                    │  Cost/joint │  At 60fps, 2 hands       │
+  ├────────────────────────────┼─────────────┼──────────────────────────┤
+  │  Math.atan2  (original)    │   ~120 ns   │  ~144,000 ns  = 0.14 ms  │
+  │  cosine similarity (now)   │     ~5 ns   │    ~6,000 ns  = 0.006 ms │
+  │  Speedup                   │     24×     │  saves ~0.13ms/frame     │
+  └────────────────────────────┴─────────────┴──────────────────────────┘
+
+  10 isStraight() calls per frame (5 fingers × 2 hands):
+    each call = 4 subtractions + 1 dot product + 1 sqrt + 1 compare
+
+
+════════════════════════════════════════════════════════════════════════════════
+F.  VIDEO-TO-CANVAS COORDINATE MAPPING  (object-fit: cover)
+════════════════════════════════════════════════════════════════════════════════
+
+  Example: video frame = 1280×720,  display container = 400×533
+
+  STEP 1 — MediaPipe normalized space  (what detectForVideo returns)
+  ┌──────────────────────────────────────────┐
+  │ (0,0)                          (1,0)     │
+  │                                          │
+  │              ● landmark                  │
+  │            (0.5, 0.3)                    │
+  │                                          │
+  │ (0,1)                          (1,1)     │
+  └──────────────────────────────────────────┘
+  videoWidth = 1280,  videoHeight = 720
+
+  STEP 2 — object-fit: cover scale computation
+  scale   = max(displayW / videoW,  displayH / videoH)
+          = max(400/1280,  533/720)
+          = max(0.3125,  0.7403)
+          = 0.7403
+
+  scaledW = 1280 × 0.7403 = 947 px   ← wider than container → cropped
+  scaledH =  720 × 0.7403 = 533 px   ← exactly fills container height
+  offsetX = (947 − 400) / 2 = 273 px
+  offsetY = (533 − 533) / 2 =   0 px
+
+  STEP 3 — Visible area after cover-crop
+  ┌──────────────────────────────────────────────────────────────────┐
+  │◄── 273px ──►┌──────────────────────┐◄── 273px ──────────────────►│
+  │  (cropped)  │  visible: 400×533    │  (cropped)                  │
+  │             │                      │                              │
+  │             │        ●             │                              │
+  │             │      landmark        │                              │
+  │             └──────────────────────┘                              │
+  │◄─────────────── scaledW = 947px ──────────────────────────────────►│
+  └──────────────────────────────────────────────────────────────────┘
+
+  STEP 4 — Convert to pixel, apply mirror
+  raw_x    = landmark.x × scaledW − offsetX  =  0.5 × 947 − 273  = 200.5
+  raw_y    = landmark.y × scaledH − offsetY  =  0.3 × 533 −   0  = 159.9
+  mirror_x = displayW − raw_x               =  400 − 200.5       = 199.5
+
+  canvas point = (199.5, 159.9)
+
+  CACHE:  Results stored in WeakMap<HTMLVideoElement, CachedMapping>.
+  Invalidated only when videoWidth / videoHeight / clientWidth / clientHeight
+  change.  At 60fps with 42 landmarks, this eliminates 41 redundant DOM reads
+  per frame — only the first landmark call touches the DOM.
+
+
+════════════════════════════════════════════════════════════════════════════════
+G.  QUIZ QUEST STATE MACHINE
+════════════════════════════════════════════════════════════════════════════════
+
+                   ┌──────────────────────────┐
+                   │     SUBJECT_SELECTION     │  ◄── app start / error reset
+                   │     (pick topics)         │
+                   └────────────┬─────────────┘
+                                │ "Start Quiz" clicked
+                                ▼
+                   ┌──────────────────────────┐
+                   │          LOADING          │  camera + MediaPipe warm up
+                   │  isHandTrackingLoading    │  generateQuizQuestion() called
+                   └────────────┬─────────────┘
+                                │ camera ready + first question loaded
+                                ▼
+           ┌──────────────────────────────────────┐
+           │               PLAYING                 │ ◄───────────────────┐
+           │  • 10s countdown                      │                     │
+           │  • question + 4 options displayed     │                     │
+           │  • watching detectedFingers state     │                     │
+           └───────┬───────────────────────┬───────┘                     │
+                   │                       │                              │
+       detectedFingers > 0             timeLeft = 0                       │
+       (valid answer gesture)          (10s expired)                      │
+                   │                       │                              │
+                   ▼                       ▼                              │
+       ┌───────────────────┐   ┌───────────────────────┐                 │
+       │      HOLDING      │   │       FEEDBACK        │                 │
+       │  3s hold countdown│   │  (incorrect, time up) │                 │
+       └───┬───────────┬───┘   └────────────┬──────────┘                 │
+           │           │                    │                             │
+       finger      holdTime = 0          2s timer                        │
+       changes     (3s held)                │                             │
+       (cancel)        │                    │                             │
+           │           ▼                    │                             │
+           │   ┌───────────────────────┐    │                             │
+           │   │       FEEDBACK        │    │                             │
+           │   │  correct/incorrect    │    │                             │
+           │   │  (score++ if correct) │    │                             │
+           │   └───────────┬───────────┘    │                             │
+           │               │ 2s timer        │                             │
+           │               └────────────────┘                             │
+           │                       │                                      │
+           │               ┌───────▼────────────────────┐                 │
+           │               │       LOADING_PROBLEM       │                 │
+           │               │  await generateQuizQuestion │                 │
+           │               │  (~800–1500ms, shows spinner│                 │
+           │               └───────────────┬─────────────┘                 │
+           │                               │ question received             │
+           └───────────▶ PLAYING  ◄────────┘──────────────────────────────┘
+
+
+════════════════════════════════════════════════════════════════════════════════
+H.  SKETCH & SCORE — VISION PIPELINE  (the only AI←hand-data path)
+════════════════════════════════════════════════════════════════════════════════
+
+  MEDIAPIPE (Browser)        GAME LAYER (Browser)         GEMINI (Server)
+  ───────────────────        ────────────────────         ───────────────
+
+  detectForVideo()
+        │
+        │ Landmark[][]
+        ▼
+  landmark[8]             isPointing() check:
+  index fingertip  ──────▶  indexTip.y  < indexPip.y   AND
+                            middleTip.y > middlePip.y  AND
+                            ringTip.y   > ringPip.y    AND
+                            pinkyTip.y  > pinkyPip.y
+                                    │
+                                pointing = true
+                                    │
+                           landmarkToCanvas(
+                             landmark.x, landmark.y,
+                             video, mirror=true)
+                                    │
+                               pixel (x, y)
+                                    │
+                                    ▼
+                       drawingCtx.quadraticCurveTo(
+                         lastPos.x, lastPos.y,
+                         midPoint.x, midPoint.y)
+                       strokeStyle = 'black'
+                       lineWidth = 5px
+                                    │
+                          (many frames of drawing
+                           accumulated on canvas)
+                                    │
+                       Player clicks "Submit Drawing"
+                                    │
+                                    ▼
+                       tempCtx.fillStyle = '#FFFFFF'
+                       tempCtx.fillRect(...)           ← white background
+                       tempCtx.drawImage(sourceCanvas) ← drawing on top
+                                    │
+                                    ▼
+                       drawingDataUri =
+                         tempCanvas.toDataURL('image/png')
+                       → "data:image/png;base64,iVBOR..."
+                                    │
+                                    │  Server Action (HTTP RPC)
+                                    └──────────────────────────▶
+                                                      evaluatePlayerDrawing({
+                                                        shapeToDraw: "circle",
+                                                        drawingDataUri: "..."
+                                                      })
+                                                              │
+                                                      {{media url=dataUri}}
+                                                      Gemini Vision API:
+                                                      "Does this PNG look
+                                                       like a circle?
+                                                       Be lenient."
+                                                              │
+                                                      { isMatch: true,
+                                                        feedback: "Great!" }
+                                                              │
+                                    ◄─────────────────────────┘
+                       setFeedback(result)
+                       if (isMatch) score++
+
+  NOTE: Raw Landmark[][] coordinates NEVER reach Gemini.
+  Only the rendered PNG crosses the boundary.
+
+
+════════════════════════════════════════════════════════════════════════════════
+I.  SINGLETON CACHING — MediaPipe Initialization
+════════════════════════════════════════════════════════════════════════════════
+
+  MODULE-LEVEL (survives unmount / route navigation):
+  ┌──────────────────────────────────────────────────────────────┐
+  │  let visionFilesetPromise:       Promise | null  =  null     │
+  │  let cachedHandLandmarker:       HandLandmarker | null = null │
+  │  let cachedHandLandmarkerConfig: string | null   =  null     │
+  └──────────────────────────────────────────────────────────────┘
+
+  FIRST LOAD  (cold start)            RETURN VISIT  (warm)
+  ────────────────────────            ──────────────────────────────
+
+  getVisionFileset()                  getVisionFileset()
+       │                                    │
+   null? YES                           null? NO
+       │                                    │
+       ▼                                    ▼
+  FilesetResolver.forVisionTasks()    return existing promise
+  (~200ms WASM download)              (already resolved, 0ms)
+       │                                    │
+       ▼                                    ▼
+  HandLandmarker.createFromOptions()  cachedHandLandmarker
+    GPU delegate (try first)          config matches? YES
+    CPU fallback on failure               │
+  (~400ms model download + compile)       ▼
+       │                            handLandmarkerRef.current
+       ▼                            = cachedHandLandmarker
+  cachedHandLandmarker = lm          (INSTANT, ~0ms)
+  cachedHandLandmarkerConfig = key
+
+  ┌──────────────────────────┬─────────────────────────┐
+  │  Scenario                │  Cost                   │
+  ├──────────────────────────┼─────────────────────────┤
+  │  First game visit        │  ~600ms                 │
+  │  Navigate to game 2      │  ~0ms  (cached)         │
+  │  Navigate to game 3      │  ~0ms  (cached)         │
+  │  Full browser refresh    │  ~600ms  (cold again)   │
+  └──────────────────────────┴─────────────────────────┘
+
+
+════════════════════════════════════════════════════════════════════════════════
+J.  ADAPTIVE FRAME SKIPPING
+════════════════════════════════════════════════════════════════════════════════
+
+  Frame budget:  16.7ms desktop (60fps)  |  33ms mobile (30fps)
+
+  skipFrames adaptation:
+    dt > budget × 1.5  →  skipFrames++   (max 3)
+    dt < budget × 0.6  →  skipFrames--   (min 0)
+
+  effective_skip = (isMobile ? 1 : 0) + skipFrames
+
+  DESKTOP  (budget = 16.7ms)
+  ──────────────────────────────────────────────────────────────────
+  skipFrames = 0  →  run every frame
+  ▐RUN▌▐RUN▌▐RUN▌▐RUN▌▐RUN▌▐RUN▌▐RUN▌▐RUN▌
+  FPS: 60
+
+  skipFrames = 1  →  run every 2nd frame  (thermal throttle kicks in)
+  ▐RUN▌     ▐RUN▌     ▐RUN▌     ▐RUN▌
+       skip       skip       skip       skip
+  FPS: 30
+
+  skipFrames = 2  →  run every 3rd frame  (heavier throttle)
+  ▐RUN▌          ▐RUN▌          ▐RUN▌
+       skip  skip      skip  skip      skip  skip
+  FPS: 20
+
+  skipFrames = 3  →  run every 4th frame  (emergency mode)
+  ▐RUN▌               ▐RUN▌               ▐RUN▌
+       skip  skip  skip      skip  skip  skip
+  FPS: 15
+
+  MOBILE  (always starts with +1 implicit skip)
+  ──────────────────────────────────────────────────────────────────
+  skipFrames = 0 + mobile bonus  →  effective 1  →  30fps baseline
+  ▐RUN▌     ▐RUN▌     ▐RUN▌     ▐RUN▌
+  FPS: 30
+
+  skipFrames = 1 + mobile bonus  →  effective 2  →  20fps
+  ▐RUN▌          ▐RUN▌          ▐RUN▌
+  FPS: 20
+
+  Skip count auto-recovers when device cools down or scene simplifies.
+
+
+════════════════════════════════════════════════════════════════════════════════
+K.  PACKAGE & RUNTIME BOUNDARIES
+════════════════════════════════════════════════════════════════════════════════
+
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  BROWSER JAVASCRIPT BUNDLE  (shipped to the user's browser)              ║
+  ║                                                                          ║
+  ║  ┌────────────────┐  ┌───────────────────────┐  ┌──────────────────┐   ║
+  ║  │  React 19      │  │  Next.js Client        │  │ @mediapipe/      ║
+  ║  │  useRef        │  │  Components            │  │ tasks-vision     ║
+  ║  │  useState      │  │  'use client' files    │  │ 0.10.14          ║
+  ║  │  useEffect     │  │  • Game UIs            │  │ (JS glue only;  ║
+  ║  │  useCallback   │  │  • useHandTracking     │  │  WASM + weights  ║
+  ║  └────────────────┘  │  • video-utils         │  │  fetched at     ║
+  ║                      │  • finger-counting     │  │  runtime)       ║
+  ║                      └───────────────────────┘  └────────┬─────────┘
+  ╚═══════════════════════════════════════════════════════════╪════════════╝
+                                                              │ fetch once,
+                                                              │ browser-cached
+                                                              ▼
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  CDN / Google Cloud Storage                                              ║
+  ║                                                                          ║
+  ║  cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm              ║
+  ║  → WebAssembly binary for hand-tracking inference  (~2 MB)              ║
+  ║                                                                          ║
+  ║  storage.googleapis.com/mediapipe-models/hand_landmarker/               ║
+  ║  hand_landmarker/float16/1/hand_landmarker.task                         ║
+  ║  → float16 neural network weights  (~8 MB)                              ║
+  ║    float16 = half precision: 2× smaller, sufficient accuracy            ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  NEXT.JS SERVER BUNDLE  (never sent to browser)                          ║
+  ║                                                                          ║
+  ║  ┌────────────────┐  ┌──────────────────────┐  ┌──────────────────┐   ║
+  ║  │  genkit 1.29.0 │  │ @genkit-ai/          │  │  zod 3.24.2      ║
+  ║  │  defineFlow    │  │ google-genai 1.29.0   │  │  z.object        ║
+  ║  │  definePrompt  │  │ googleAI() plugin     │  │  z.string        ║
+  ║  └────────────────┘  │ API key handling      │  │  z.number        ║
+  ║                      │ Gemini API client     │  │  z.boolean       ║
+  ║                      └──────────┬────────────┘  └──────────────────┘
+  ╚═════════════════════════════════╪════════════════════════════════════════╝
+                                    │ HTTPS
+                                    ▼
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  GOOGLE AI API                                                           ║
+  ║  Model: gemini-2.5-flash-lite                                            ║
+  ║  Modes: text generation  |  structured JSON output  |  vision (image)   ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+
+
+════════════════════════════════════════════════════════════════════════════════
+L.  DATA STRUCTURES AT EACH LAYER BOUNDARY
+════════════════════════════════════════════════════════════════════════════════
+
+  ── BOUNDARY 1:  MediaPipe output → Hook refs ───────────────────────────────
+
+  Landmark[][]  — array of hands, each with 21 3D points
+  ┌───────────────────────────────────────────────────────────┐
+  │  [                                                        │
+  │    [  // Hand 0                                           │
+  │      { x: 0.52, y: 0.68, z: 0.00 },  // 0  wrist        │
+  │      { x: 0.55, y: 0.60, z: 0.01 },  // 1  thumb CMC    │
+  │      { x: 0.58, y: 0.52, z: 0.01 },  // 2  thumb MCP    │
+  │      { x: 0.60, y: 0.44, z: 0.00 },  // 3  thumb IP     │
+  │      { x: 0.62, y: 0.38, z: 0.00 },  // 4  thumb TIP    │
+  │      { x: 0.48, y: 0.55, z: 0.01 },  // 5  index MCP    │
+  │      { x: 0.46, y: 0.43, z: 0.01 },  // 6  index PIP    │
+  │      { x: 0.44, y: 0.34, z: 0.00 },  // 7  index DIP    │
+  │      { x: 0.42, y: 0.26, z: 0.00 },  // 8  index TIP ← pointer/pen │
+  │      ...                                                  │
+  │      { x: 0.30, y: 0.28, z: 0.00 },  // 20 pinky TIP    │
+  │    ],                                                     │
+  │    [ ... ]  // Hand 1 (if 2 hands detected)               │
+  │  ]                                                        │
+  └───────────────────────────────────────────────────────────┘
+
+  Handedness[][]
+  ┌───────────────────────────────────────────────────────────┐
+  │  [                                                        │
+  │    [{ categoryName: "Left",  score: 0.93 }],  // Hand 0  │
+  │    [{ categoryName: "Right", score: 0.89 }],  // Hand 1  │
+  │  ]                                                        │
+  └───────────────────────────────────────────────────────────┘
+
+  ── BOUNDARY 2:  Game → Gemini  (Server Action inputs) ──────────────────────
+
+  generateQuizQuestion:
+  ┌──────────────────────────────────────────────┐
+  │  { currentScore: 7,                          │
+  │    subjects: ["History", "Science"] }        │
+  └──────────────────────────────────────────────┘
+
+  generateMathProblem:
+  ┌──────────────────────────────────────────────┐
+  │  { difficulty: 6,                            │
+  │    currentScore: 3,                          │
+  │    pastScores: [2, 3, 3] }                   │
+  └──────────────────────────────────────────────┘
+
+  generateMathProblem2:
+  ┌──────────────────────────────────────────────┐
+  │  { difficulty: 4,  currentScore: 5 }         │
+  └──────────────────────────────────────────────┘
+
+  generateShapeToDraw:
+  ┌──────────────────────────────────────────────┐
+  │  { pastShapes: ["circle", "square"] }        │
+  └──────────────────────────────────────────────┘
+
+  evaluatePlayerDrawing:
+  ┌──────────────────────────────────────────────────────────┐
+  │  { shapeToDraw: "triangle",                              │
+  │    drawingDataUri: "data:image/png;base64,iVBOR..." }    │
+  └──────────────────────────────────────────────────────────┘
+
+  ── BOUNDARY 3:  Gemini → Game  (Zod-validated JSON responses) ──────────────
+
+  generateQuizQuestion:
+  ┌──────────────────────────────────────────────────────────┐
+  │  { question: "What is the capital of Japan?",            │
+  │    options: ["Beijing","Seoul","Tokyo","Bangkok"],        │
+  │    correctAnswerIndex: 2 }  // Zod: .int().min(0).max(3) │
+  └──────────────────────────────────────────────────────────┘
+
+  generateMathProblem:
+  ┌──────────────────────────────────────────────────────────┐
+  │  { problem: "You have 8 apples, eat half, pick 3 more.", │
+  │    solution: 7 }  // Zod: .int().min(0).max(10) enforced │
+  └──────────────────────────────────────────────────────────┘
+
+  generateMathProblem2:
+  ┌──────────────────────────────────────────────────────────┐
+  │  { problem: "6 * 7",                                     │
+  │    options: [36, 42, 48, 49],  // Zod: .min(4).max(6)   │
+  │    correctAnswer: 42 }  // MUST be in options array      │
+  └──────────────────────────────────────────────────────────┘
+
+  evaluatePlayerDrawing:
+  ┌──────────────────────────────────────────────────────────┐
+  │  { isMatch: true,                                        │
+  │    feedback: "Great triangle! Nice straight edges." }    │
+  └──────────────────────────────────────────────────────────┘
+
+
+════════════════════════════════════════════════════════════════════════════════
+M.  PER-GAME SYSTEM USAGE MATRIX
+════════════════════════════════════════════════════════════════════════════════
+
+  ┌──────────────────────┬──────────┬──────────┬────────────────────┬────────┐
+  │  Game                │MediaPipe │ Gemini   │ Landmark usage     │ AI/min │
+  ├──────────────────────┼──────────┼──────────┼────────────────────┼────────┤
+  │  Quiz Quest          │  YES     │  YES     │ All 21 (count)     │  ~5    │
+  │                      │          │          │ #0 wrist (overlay) │        │
+  ├──────────────────────┼──────────┼──────────┼────────────────────┼────────┤
+  │  Math Challenge      │  YES     │  YES     │ All 21 (count)     │  ~5    │
+  │                      │          │          │ answer must = 0–10 │        │
+  ├──────────────────────┼──────────┼──────────┼────────────────────┼────────┤
+  │  Math Challenge 2    │  YES     │  YES     │ #8 index tip pos   │  ~5    │
+  │  (bubble pop)        │          │          │ → bubble collision │        │
+  ├──────────────────────┼──────────┼──────────┼────────────────────┼────────┤
+  │  Sketch & Score  ★   │  YES     │  YES     │ #8 draw / #4 pinch │  ~10   │
+  │  (SPECIAL CASE)      │          │  VISION  │ → canvas → PNG     │        │
+  ├──────────────────────┼──────────┼──────────┼────────────────────┼────────┤
+  │  Ping Pong           │  YES     │  NO      │ #0 wrist y → paddle│  0     │
+  ├──────────────────────┼──────────┼──────────┼────────────────────┼────────┤
+  │  Air Piano           │  YES     │  NO      │ #4,8,12,16,20 tips │  0     │
+  │                      │          │          │ → key collision    │        │
+  ├──────────────────────┼──────────┼──────────┼────────────────────┼────────┤
+  │  Just Show Hands     │  YES     │  NO      │ All 21 (display)   │  0     │
+  └──────────────────────┴──────────┴──────────┴────────────────────┴────────┘
+
+  ★ Sketch & Score is the ONLY game where hand-derived data reaches Gemini
+    (as a rendered PNG — raw Landmark[][] coordinates never cross to the server).
+
+
+════════════════════════════════════════════════════════════════════════════════
+N.  NETWORK & EXECUTION BOUNDARY MAP
+════════════════════════════════════════════════════════════════════════════════
+
+  USER'S DEVICE                            INTERNET          SERVERS
+  ─────────────────────────────────────    ────────          ──────────────────
+
+  Browser Tab
+  ┌─────────────────────────────────┐
+  │  GPU / WASM process             │      CDN
+  │  ┌───────────────────────────┐  │ ◄── (jsdelivr + Google Storage)
+  │  │  MediaPipe HandLandmarker │  │     WASM + model weights
+  │  │  (WebAssembly + GPU)      │  │     fetched once, browser-cached
+  │  └───────────────────────────┘  │
+  │                                 │
+  │  JS main thread                 │
+  │  ┌───────────────────────────┐  │
+  │  │  React + Game Components  │  │
+  │  │  useHandTracking()        │  │
+  │  │  rAF loop + useEffect     │  │
+  │  └──────────────┬────────────┘  │
+  └─────────────────┼───────────────┘
+                    │
+                    │  HTTP POST (Next.js Server Action)
+                    │  — only on game state transitions —
+                    │  — NOT on every frame —
+                    │  serialized input: {score, subjects} etc.
+                    │
+                    ▼
+  ┌─────────────────────────────────┐
+  │  Next.js Server                 │
+  │  ┌───────────────────────────┐  │        Google AI API
+  │  │  Genkit flows             │  │ ──────▶ generativelanguage
+  │  │  Zod schema validation    │  │         .googleapis.com
+  │  └───────────────────────────┘  │ ◄──────  structured JSON
+  └─────────────────┬───────────────┘
+                    │
+                    │  serialized response: {question, options, ...}
+                    ▼
+  Browser: await resolves → setState → game continues
+
+  ─────────────────────────────────────────────────────────────────────────────
+  DATA THAT NEVER CROSSES THESE BOUNDARIES:
+  ✗  Landmark[][] from browser → Gemini     (except as rendered PNG in Sketch)
+  ✗  MediaPipe model executing on server
+  ✗  Gemini JSON arriving inside MediaPipe inference loop
+  ✗  API key exposed in the browser bundle  (server-only env var)
+  ✗  Camera stream uploaded to the server   (inference is local/client-side)
+  ─────────────────────────────────────────────────────────────────────────────
+
+
+================================================================================
+END OF DIAGRAMS
+================================================================================

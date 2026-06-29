@@ -1,0 +1,63 @@
+
+> nextn@0.1.0 dev
+> next dev --turbopack -p 9002
+
+⚠ `eslint` configuration in next.config.ts is no longer supported. See more info here: https://nextjs.org/docs/app/api-reference/cli/next#next-lint-options
+⚠ Invalid next.config.ts options detected: 
+⚠     Unrecognized key(s) in object: 'eslint'
+⚠ See more info here: https://nextjs.org/docs/messages/invalid-next-config
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:9002
+- Network:       http://192.168.0.105:9002
+- Environments: .env
+- Experiments (use with caution):
+  · optimizePackageImports
+
+✓ Starting...
+✓ Ready in 1844ms
+ GET / 200 in 1887ms (compile: 1665ms, render: 222ms)
+ GET /games/math-challenge?perf=1 200 in 1213ms (compile: 1060ms, render: 153ms)
+(node:1280) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Error [GenkitError]: RESOURCE_EXHAUSTED: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash-lite
+Please retry in 8.57635319s.
+    at async (src\ai\flows\dynamic-math-problem-generation.ts:92:22)
+  90 |   },
+  91 |   async input => {
+> 92 |     const {output} = await prompt(input);
+     |                      ^
+  93 |     return output!;
+  94 |   }
+  95 | ); {
+  source: undefined,
+  status: 'RESOURCE_EXHAUSTED',
+  detail: undefined,
+  code: 429,
+  originalMessage: 'Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n' +
+    '* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash-lite\n' +
+    'Please retry in 8.57635319s.'
+}
+⨯ Error [GenkitError]: RESOURCE_EXHAUSTED: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash-lite
+Please retry in 8.57635319s.
+    at async (src\ai\flows\dynamic-math-problem-generation.ts:92:22)
+  90 |   },
+  91 |   async input => {
+> 92 |     const {output} = await prompt(input);
+     |                      ^
+  93 |     return output!;
+  94 |   }
+  95 | ); {
+  source: undefined,
+  status: 'RESOURCE_EXHAUSTED',
+  detail: undefined,
+  code: 429,
+  originalMessage: 'Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n' +
+    '* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash-lite\n' +
+    'Please retry in 8.57635319s.',
+  traceId: '92417fa76f6b18ad96974ed783698cf5',
+  ignoreFailedSpan: true,
+  digest: '1839272537'
+}
+ POST /games/math-challenge?perf=1 500 in 2.8s (compile: 222ms, render: 2.6s)
