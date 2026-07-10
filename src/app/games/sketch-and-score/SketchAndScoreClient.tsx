@@ -7,7 +7,7 @@ import { generateShapeToDraw, evaluatePlayerDrawing } from '@/ai/flows/shape-cha
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Loader, Pencil, Eraser, Sparkles, Circle, Square, Triangle, Star, Heart, ArrowRight, Home, CheckCircle2, XCircle, Hand } from 'lucide-react';
+import { Loader, Pencil, Eraser, Sparkles, Circle, Square, Triangle, Star, Heart, ArrowRight, Home, CheckCircle2, XCircle, Hand, Eye, EyeOff } from 'lucide-react';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { landmarkToCanvas } from '@/lib/video-utils';
@@ -53,6 +53,7 @@ export default function SketchAndScoreClient() {
   const [drawingTool, setDrawingTool] = useState<DrawingTool>('PENCIL');
   const [feedback, setFeedback] = useState<{isMatch: boolean, message: string} | null>(null);
   const [eraserSize, setEraserSize] = useState(25);
+  const [isBlurEnabled, setIsBlurEnabled] = useState(false);
 
   const getDrawingContext = useCallback(() => drawingCanvasRef.current?.getContext('2d'), []);
   const getOverlayContext = useCallback(() => overlayCanvasRef.current?.getContext('2d'), []);
@@ -296,6 +297,16 @@ export default function SketchAndScoreClient() {
                 if (drawingCanvasRef.current && drawingCtx && video) {
                     const { x: mirroredX, y } = landmarkToCanvas(activeLandmark.x, activeLandmark.y, video, true);
 
+                    // Apply smoothing (Exponential Moving Average) to reduce jitter
+                    const smoothingFactor = 0.4;
+                    let currentX = mirroredX;
+                    let currentY = y;
+
+                    if (lastPosition.current) {
+                        currentX = lastPosition.current.x + (mirroredX - lastPosition.current.x) * smoothingFactor;
+                        currentY = lastPosition.current.y + (y - lastPosition.current.y) * smoothingFactor;
+                    }
+
                     if (activeTool === 'PENCIL') {
                         drawingCtx.globalCompositeOperation = 'source-over';
                         drawingCtx.strokeStyle = 'black';
@@ -310,8 +321,8 @@ export default function SketchAndScoreClient() {
                     
                     if (lastPosition.current) {
                         const midPoint = {
-                            x: (lastPosition.current.x + mirroredX) / 2,
-                            y: (lastPosition.current.y + y) / 2
+                            x: (lastPosition.current.x + currentX) / 2,
+                            y: (lastPosition.current.y + currentY) / 2
                         };
                         drawingCtx.beginPath();
                         drawingCtx.moveTo(midPointRef.current?.x ?? lastPosition.current.x, midPointRef.current?.y ?? lastPosition.current.y);
@@ -320,10 +331,10 @@ export default function SketchAndScoreClient() {
                         midPointRef.current = midPoint;
                     } else {
                       drawingCtx.beginPath();
-                      drawingCtx.arc(mirroredX, y, drawingCtx.lineWidth / 2, 0, Math.PI * 2);
+                      drawingCtx.arc(currentX, currentY, drawingCtx.lineWidth / 2, 0, Math.PI * 2);
                       drawingCtx.fill();
                     }
-                    lastPosition.current = { x: mirroredX, y };
+                    lastPosition.current = { x: currentX, y: currentY };
                 }
             } else {
                 lastPosition.current = null;
@@ -451,6 +462,9 @@ export default function SketchAndScoreClient() {
     return (
         <>
             <video ref={videoRef} autoPlay playsInline muted className="absolute top-0 left-0 w-full h-full object-cover scale-x-[-1]"></video>
+            {isBlurEnabled && (
+                <div className="absolute inset-0 bg-white/50 backdrop-blur-md pointer-events-none"></div>
+            )}
             <canvas ref={drawingCanvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-80"></canvas>
             <canvas ref={overlayCanvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
 
@@ -498,9 +512,12 @@ export default function SketchAndScoreClient() {
             )}
             {gameState === 'DRAWING' && (
                 <div className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4 z-20">
-                  <div className="flex justify-center w-full">
+                  <div className="flex justify-center items-center w-full">
                     <Button onClick={handleSubmit} size="lg" className="font-headline text-lg rounded-xl border-2 border-white/80 bg-amber-500 font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]" >
                       <Sparkles className="mr-2"/> Submit Drawing
+                    </Button>
+                    <Button onClick={() => setIsBlurEnabled(!isBlurEnabled)} variant="outline" size="icon" className="h-12 w-12 rounded-xl border-2 border-white/40 bg-black/40 text-white backdrop-blur transition-all hover:bg-black/60 ml-4" title="Toggle Background Blur">
+                        {isBlurEnabled ? <EyeOff /> : <Eye />}
                     </Button>
                     {isMobile ? (
                       <div className="flex gap-2 ml-4">
