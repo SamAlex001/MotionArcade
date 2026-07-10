@@ -190,6 +190,9 @@ export function useHandTracking(): HandTrackingHook {
   }, []);
 
   const stopVideo = useCallback(() => {
+    // Invalidate any startVideo still in flight (e.g. awaiting getUserMedia)
+    // so it releases its stream instead of resurrecting the camera.
+    stopGenRef.current++;
     if (requestRef.current) {
       cancelAnimationFrame(requestRef.current);
       requestRef.current = undefined;
@@ -206,6 +209,9 @@ export function useHandTracking(): HandTrackingHook {
     detectedFingersRef.current = 0;
   }, []);
 
+  const startingRef = useRef(false);
+  const stopGenRef = useRef(0);
+
   const waitForVideo = (): Promise<HTMLVideoElement> =>
     new Promise(resolve => {
       const tick = () => {
@@ -217,8 +223,14 @@ export function useHandTracking(): HandTrackingHook {
 
   const startVideo = useCallback(async (): Promise<void> => {
     if (videoRef.current && videoRef.current.srcObject) return;
+    // Concurrent starts (e.g. React dev double-mounted effects) both pass the
+    // srcObject guard while awaiting getUserMedia; the second srcObject swap
+    // then interrupts the first play() with an AbortError.
+    if (startingRef.current) return;
+    startingRef.current = true;
     setError(null);
     try {
+      const gen = stopGenRef.current;
       const video = await waitForVideo();
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -228,10 +240,27 @@ export function useHandTracking(): HandTrackingHook {
         },
         audio: false,
       });
+      if (video.srcObject || gen !== stopGenRef.current) {
+        // Another start won the race, or stopVideo was called while we were
+        // awaiting the camera — release our stream instead of resurrecting it.
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
       video.srcObject = stream;
       video.muted = true;
       video.playsInline = true;
-      await video.play();
+      try {
+        await video.play();
+      } catch (playErr: any) {
+        // Teardown races are benign: AbortError = a newer load took over;
+        // NotSupportedError with a cleared srcObject = stopVideo removed the
+        // source while play() was pending.
+        const benign =
+          playErr?.name === 'AbortError' ||
+          (playErr?.name === 'NotSupportedError' && !video.srcObject);
+        if (!benign) throw playErr;
+      }
+      if (gen !== stopGenRef.current) return; // stopped while starting — don't begin inference
 
       if (video.readyState >= 2) {
         predictWebcam();
@@ -249,6 +278,8 @@ export function useHandTracking(): HandTrackingHook {
         setError(`Could not access camera: ${err.message}`);
       }
       throw err;
+    } finally {
+      startingRef.current = false;
     }
   }, [predictWebcam]);
 

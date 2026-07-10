@@ -173,7 +173,7 @@ export default function MathChallengeClient() {
       
       ctx.beginPath();
       ctx.arc(x, y - 40, 30, 0, 2 * Math.PI);
-      ctx.fillStyle = 'rgba(128, 90, 213, 0.8)';
+      ctx.fillStyle = 'rgba(45, 212, 191, 0.9)';
       ctx.fill();
 
       ctx.fillStyle = 'white';
@@ -188,10 +188,10 @@ export default function MathChallengeClient() {
   const renderGameState = () => {
     if (gameState === 'DIFFICULTY_SELECTION') {
       return (
-        <Card className="max-w-md w-full p-6">
+        <Card className="max-w-md w-full p-6 rounded-2xl border-2 border-teal-400/70 bg-black/75 text-white backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-teal-500/40">
             <CardContent className="pt-6">
-              <h2 className="font-headline text-3xl mb-4 text-center">Math Challenge</h2>
-              <p className="text-muted-foreground mb-8 text-center">
+              <h2 className="font-headline font-bold text-3xl mb-4 text-center">Math <span className="text-teal-400">Challenge</span></h2>
+              <p className="text-white/70 mb-8 text-center">
                 Use your hands to answer math questions. The answer will always be between 0 and 10.
               </p>
               
@@ -208,7 +208,7 @@ export default function MathChallengeClient() {
               </div>
 
                {isMobile && (
-                 <Alert className="mt-6">
+                 <Alert className="mt-6 rounded-xl border-2 border-white/40 bg-white/10 text-white">
                   <Smartphone className="h-4 w-4" />
                   <AlertTitle>Mobile Experience</AlertTitle>
                   <AlertDescription>
@@ -217,7 +217,7 @@ export default function MathChallengeClient() {
                 </Alert>
               )}
 
-              <Button onClick={startGame} size="lg" className="font-headline text-lg mt-8 w-full">Start Game</Button>
+              <Button onClick={startGame} size="lg" className="font-headline font-bold text-lg mt-8 w-full rounded-xl border-2 border-white/80 bg-teal-500 text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-teal-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Start Game</Button>
             </CardContent>
           </Card>
       );
@@ -229,7 +229,7 @@ export default function MathChallengeClient() {
 
     return (
       <div className="w-full max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-        <div className="relative w-full aspect-[3/4] lg:aspect-video rounded-lg overflow-hidden bg-muted shadow-lg">
+        <div className="relative w-full aspect-[3/4] lg:aspect-video rounded-2xl border-2 border-teal-400/70 overflow-hidden bg-black/60 shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-teal-500/40">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover scale-x-[-1]"></video>
           <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
           
@@ -246,47 +246,58 @@ export default function MathChallengeClient() {
         </div>
 
         <div className="flex flex-col gap-4 w-full">
-            <Card className="w-full p-6 text-center flex items-center justify-center flex-grow min-h-[140px] lg:min-h-[200px]">
+            <Card className="w-full p-6 text-center flex items-center justify-center flex-grow min-h-[140px] lg:min-h-[200px] rounded-2xl border-2 border-white/20 bg-black/60 text-white backdrop-blur">
                <div className="flex items-center justify-center h-full">
                 {gameState === 'LOADING_PROBLEM' ? (
-                  <Loader className="h-12 w-12 animate-spin text-primary" />
+                  <Loader className="h-12 w-12 animate-spin text-teal-400" />
                 ) : (
-                  <p className="font-headline text-3xl md:text-4xl tracking-wide">
+                  <p className="font-headline font-bold text-3xl md:text-4xl tracking-wide">
                     {currentProblem?.problem || 'Loading...'}
                   </p>
                 )}
               </div>
             </Card>
 
-            <Card className="w-full p-4">
+            <Card className="w-full p-4 rounded-2xl border-2 border-white/20 bg-black/60 text-white backdrop-blur">
               <div className="flex justify-between items-center text-lg gap-4">
                 <div className="flex flex-col items-center">
-                  <span className="font-bold text-primary text-sm">SCORE</span>
-                  <span className="font-headline text-4xl">{score}</span>
+                  <span className="font-headline font-bold text-teal-400 text-sm">SCORE</span>
+                  <span className="font-headline font-bold text-4xl text-teal-300">{score}</span>
                 </div>
                 <div className="flex flex-col items-center">
-                  <span className="text-muted-foreground text-sm flex items-center gap-1"><Hand className="h-4 w-4" /> GUESS</span>
-                  <span className="font-headline text-4xl">{potentialAnswer ?? detectedFingers ?? '?'}</span>
+                  <span className="text-white/60 text-sm flex items-center gap-1"><Hand className="h-4 w-4" /> GUESS</span>
+                  <span className="font-headline font-bold text-4xl">{potentialAnswer ?? detectedFingers ?? '?'}</span>
                 </div>
                 <div className="flex flex-col items-center">
-                   <span className="text-muted-foreground text-sm flex items-center gap-1"><Timer className="h-4 w-4" /> TIME</span>
-                  <span className="font-headline text-4xl w-20 text-center">{isThinking ? timeLeft : isHolding ? holdTime : '...'}</span>
+                   <span className="text-white/60 text-sm flex items-center gap-1"><Timer className="h-4 w-4" /> TIME</span>
+                  <span className="font-headline font-bold text-4xl w-20 text-center">{isThinking ? timeLeft : isHolding ? holdTime : '...'}</span>
                 </div>
               </div>
                
                {isThinking && (
                  <div className="mt-2 text-center">
-                   <p className="text-sm text-muted-foreground">Show your answer!</p>
+                   <p className="text-sm text-white/60">Show your answer!</p>
                    <Progress value={(timeLeft / problemTimerDuration) * 100} className="w-full h-2 mt-1" />
                  </div>
               )}
                {isHolding && (
                  <div className="mt-2 text-center">
-                   <p className="text-sm text-muted-foreground">Hold your answer to confirm!</p>
+                   <p className="text-sm text-white/60">Hold your answer to confirm!</p>
                    <Progress value={((ANSWER_HOLD_SECONDS - holdTime) / ANSWER_HOLD_SECONDS) * 100} className="w-1/2 mx-auto h-2 mt-1" />
                  </div>
               )}
             </Card>
+
+            {/* Instructions */}
+            <div className="mt-4 p-6 rounded-2xl border-2 border-teal-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-teal-500/40">
+              <h3 className="text-xl font-headline font-bold text-teal-400 mb-3">How to Play</h3>
+              <ul className="text-gray-300 space-y-2">
+                <li>✋ Read the math problem on the screen</li>
+                <li>✌️ Show the answer by holding up the correct number of fingers (0-10)</li>
+                <li>⏳ Hold your hands steady to lock in your answer!</li>
+                <li>🏆 Answer before the timer runs out to score points</li>
+              </ul>
+            </div>
         </div>
       </div>
     );

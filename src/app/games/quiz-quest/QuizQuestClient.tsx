@@ -195,7 +195,7 @@ export default function QuizQuestClient() {
       // Draw circle
       ctx.beginPath();
       ctx.arc(x, y - 40, 30, 0, 2 * Math.PI);
-      ctx.fillStyle = 'rgba(128, 90, 213, 0.8)'; // Primary color with opacity
+      ctx.fillStyle = 'rgba(45, 212, 191, 0.9)'; // Primary color with opacity
       ctx.fill();
 
       // Draw text
@@ -212,10 +212,10 @@ export default function QuizQuestClient() {
     if (gameState === 'SUBJECT_SELECTION') {
       return (
         <div className="flex flex-col items-center justify-center text-center">
-            <Card className="max-w-lg w-full p-6">
+            <Card className="max-w-lg w-full p-6 rounded-2xl border-2 border-violet-400/70 bg-black/75 text-white backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-violet-500/40">
                 <CardContent className="pt-6">
-                    <h2 className="font-headline text-3xl mb-4">Choose Your Topics</h2>
-                    <p className="text-muted-foreground mb-6">
+                    <h2 className="font-headline font-bold text-3xl mb-4">Choose Your <span className="text-violet-400">Topics</span></h2>
+                    <p className="text-white/70 mb-6">
                         Select one or more subjects for your quiz. Questions will be based on your choices.
                     </p>
                     <div className="space-y-4 text-left">
@@ -229,7 +229,7 @@ export default function QuizQuestClient() {
                                     />
                                     <label
                                         htmlFor={subject.id}
-                                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                                        className="text-sm font-medium leading-none text-white peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                                     >
                                         {subject.label}
                                     </label>
@@ -238,16 +238,17 @@ export default function QuizQuestClient() {
                         </div>
                          <div className="space-y-2">
                             <Label htmlFor="other-subject">Other</Label>
-                            <Input 
-                                id="other-subject" 
+                            <Input
+                                id="other-subject"
                                 placeholder="e.g., 'Movies', 'Sports'"
                                 value={otherSubject}
                                 onChange={(e) => setOtherSubject(e.target.value)}
+                                className="rounded-xl border-2 border-white/40 bg-white/10 text-white placeholder:text-white/40"
                             />
-                            <p className="text-xs text-muted-foreground">Specify a custom topic.</p>
+                            <p className="text-xs text-white/60">Specify a custom topic.</p>
                         </div>
                     </div>
-                    <Button onClick={startGame} size="lg" className="font-headline text-lg mt-8 w-full" disabled={selectedSubjects.length === 0 && !otherSubject.trim()}>Start Quiz</Button>
+                    <Button onClick={startGame} size="lg" className="font-headline font-bold text-lg mt-8 w-full rounded-xl border-2 border-white/80 bg-violet-500 text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-violet-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]" disabled={selectedSubjects.length === 0 && !otherSubject.trim()}>Start Quiz</Button>
                 </CardContent>
             </Card>
         </div>
@@ -260,7 +261,7 @@ export default function QuizQuestClient() {
 
     return (
       <div className="w-full max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-        <div className="relative w-full aspect-[3/4] lg:aspect-video rounded-lg overflow-hidden bg-muted shadow-lg">
+        <div className="relative w-full aspect-[3/4] lg:aspect-video rounded-2xl border-2 border-violet-400/70 overflow-hidden bg-black/60 shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-violet-500/40">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover scale-x-[-1]"></video>
           <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
           
@@ -277,22 +278,22 @@ export default function QuizQuestClient() {
         </div>
 
         <div className="flex flex-col gap-4 w-full">
-            <Card className="w-full p-6 text-center">
+            <Card className="w-full p-6 text-center rounded-2xl border-2 border-white/20 bg-black/60 text-white backdrop-blur">
                <div className="flex flex-col items-center justify-center min-h-[120px]">
                 {gameState === 'LOADING_PROBLEM' ? (
-                  <Loader className="h-12 w-12 animate-spin text-primary" />
+                  <Loader className="h-12 w-12 animate-spin text-violet-400" />
                 ) : (
                   <>
-                    <p className="font-headline text-xl md:text-2xl tracking-wide mb-6">
+                    <p className="font-headline font-bold text-xl md:text-2xl tracking-wide mb-6">
                       {currentProblem?.question || 'Loading...'}
                     </p>
                     <div className="grid grid-cols-2 gap-3 w-full">
                       {currentProblem?.options.map((option, index) => (
                         <Card 
                           key={index} 
-                          className={`p-3 text-sm md:text-base border-2 ${feedback && currentProblem.correctAnswerIndex === index ? 'border-green-400 bg-green-400/10' : ''} ${feedback === 'incorrect' && lastSubmittedAnswer === index + 1 ? 'border-red-400 bg-red-400/10' : ''}`}
+                          className={`p-3 text-sm md:text-base rounded-xl border-2 border-white/20 bg-white/5 text-white ${feedback && currentProblem.correctAnswerIndex === index ? 'border-green-400 bg-green-400/10' : ''} ${feedback === 'incorrect' && lastSubmittedAnswer === index + 1 ? 'border-red-400 bg-red-400/10' : ''}`}
                         >
-                          <span className="font-bold mr-2">{index + 1}.</span>{option}
+                          <span className="font-headline font-bold mr-2 text-violet-300">{index + 1}.</span>{option}
                         </Card>
                       ))}
                     </div>
@@ -301,35 +302,46 @@ export default function QuizQuestClient() {
               </div>
             </Card>
 
-            <Card className="w-full p-4">
+            <Card className="w-full p-4 rounded-2xl border-2 border-white/20 bg-black/60 text-white backdrop-blur">
               <div className="flex justify-between items-center text-lg gap-4">
                 <div className="flex flex-col items-center">
-                  <span className="font-bold text-primary text-sm">SCORE</span>
-                  <span className="font-headline text-4xl">{score}</span>
+                  <span className="font-headline font-bold text-violet-400 text-sm">SCORE</span>
+                  <span className="font-headline font-bold text-4xl text-violet-300">{score}</span>
                 </div>
                 <div className="flex flex-col items-center">
-                   <span className="text-muted-foreground text-sm flex items-center gap-1"><Hand className="h-4 w-4" /> CHOICE</span>
-                   <span className="font-headline text-4xl">{potentialAnswer || detectedFingers || '?'}</span>
+                   <span className="text-white/60 text-sm flex items-center gap-1"><Hand className="h-4 w-4" /> CHOICE</span>
+                   <span className="font-headline font-bold text-4xl">{potentialAnswer || detectedFingers || '?'}</span>
                 </div>
                 <div className="flex flex-col items-center">
-                   <span className="text-muted-foreground text-sm flex items-center gap-1"><Timer className="h-4 w-4" /> TIME</span>
-                  <span className="font-headline text-4xl w-20 text-center">{isThinking ? timeLeft : isHolding ? holdTime : '...'}</span>
+                   <span className="text-white/60 text-sm flex items-center gap-1"><Timer className="h-4 w-4" /> TIME</span>
+                  <span className="font-headline font-bold text-4xl w-20 text-center">{isThinking ? timeLeft : isHolding ? holdTime : '...'}</span>
                 </div>
               </div>
 
               {isThinking && (
                  <div className="mt-2 text-center">
-                   <p className="text-sm text-muted-foreground">Choose your answer!</p>
+                   <p className="text-sm text-white/60">Choose your answer!</p>
                    <Progress value={(timeLeft / THINKING_TIMER_SECONDS) * 100} className="w-full h-2 mt-1" />
                  </div>
               )}
                {isHolding && (
                  <div className="mt-2 text-center">
-                   <p className="text-sm text-muted-foreground">Hold your choice to confirm!</p>
+                   <p className="text-sm text-white/60">Hold your choice to confirm!</p>
                    <Progress value={((ANSWER_HOLD_SECONDS - holdTime) / ANSWER_HOLD_SECONDS) * 100} className="w-1/2 mx-auto h-2 mt-1" />
                  </div>
               )}
             </Card>
+
+            {/* Instructions */}
+            <div className="mt-4 p-6 rounded-2xl border-2 border-violet-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-violet-500/40">
+              <h3 className="text-xl font-headline font-bold text-violet-400 mb-3">How to Play</h3>
+              <ul className="text-gray-300 space-y-2">
+                <li>✋ Read the question and the 4 possible answers</li>
+                <li>✌️ Hold up 1, 2, 3, or 4 fingers to select your answer</li>
+                <li>⏳ Keep your hand steady to lock in your choice!</li>
+                <li>🏆 Answer before the timer runs out to increase your score</li>
+              </ul>
+            </div>
         </div>
       </div>
     );

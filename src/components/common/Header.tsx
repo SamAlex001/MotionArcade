@@ -29,23 +29,27 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container flex h-14 items-center">
-        <Link href="/" className="mr-6 flex items-center space-x-2">
-          <Gamepad2 className="h-6 w-6 text-primary" />
-          <span className="hidden font-bold sm:inline-block font-headline">
-            MotionArcade
+      <div className="container flex h-16 items-center">
+        <Link href="/" className="group mr-6 flex items-center space-x-2.5">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl border-2 border-foreground/85 bg-gradient-to-br from-primary to-teal-400 text-white shadow-[2px_2px_0_0_rgba(20,35,40,0.85)] transition-transform group-hover:animate-wiggle">
+            <Gamepad2 className="h-5 w-5" />
+          </span>
+          <span className="hidden font-bold sm:inline-block font-headline text-xl tracking-tight">
+            Motion<span className="text-gradient-brand">Arcade</span>
           </span>
         </Link>
-        
+
         {/* Desktop Navigation */}
-        <nav className="hidden md:flex items-center space-x-6 text-sm font-medium">
+        <nav className="hidden md:flex items-center space-x-1.5 text-sm font-bold">
           {navLinks.map(({ href, label }) => (
             <Link
               key={label}
               href={href}
               className={cn(
-                'transition-colors hover:text-foreground/80',
-                isActive(href) ? 'text-foreground' : 'text-foreground/60'
+                'rounded-full px-4 py-1.5 transition-all',
+                isActive(href)
+                  ? 'border-2 border-foreground/85 bg-amber-200 text-foreground shadow-[2px_2px_0_0_rgba(20,35,40,0.85)]'
+                  : 'text-foreground/60 hover:bg-muted hover:text-foreground'
               )}
             >
               {label}
@@ -64,19 +68,25 @@ export function Header() {
             </SheetTrigger>
             <SheetContent side="left">
               <div className="flex flex-col gap-6 pt-10">
-                <Link href="/" className="flex items-center space-x-2" onClick={closeSheet}>
-                  <Gamepad2 className="h-6 w-6 text-primary" />
-                  <span className="font-bold font-headline">MotionArcade</span>
+                <Link href="/" className="flex items-center space-x-2.5" onClick={closeSheet}>
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl border-2 border-foreground/85 bg-gradient-to-br from-primary to-teal-400 text-white shadow-[2px_2px_0_0_rgba(20,35,40,0.85)]">
+                    <Gamepad2 className="h-5 w-5" />
+                  </span>
+                  <span className="font-bold font-headline text-xl tracking-tight">
+                    Motion<span className="text-gradient-brand">Arcade</span>
+                  </span>
                 </Link>
-                <nav className="flex flex-col gap-4">
+                <nav className="flex flex-col gap-2.5">
                   {navLinks.map(({ href, label }) => (
                     <Link
                       key={label}
                       href={href}
                       onClick={closeSheet}
                       className={cn(
-                        'text-lg transition-colors hover:text-foreground/80',
-                        isActive(href) ? 'text-foreground' : 'text-foreground/60'
+                        'rounded-full px-4 py-2 text-lg font-bold transition-all',
+                        isActive(href)
+                          ? 'border-2 border-foreground/85 bg-amber-200 text-foreground shadow-[2px_2px_0_0_rgba(20,35,40,0.85)]'
+                          : 'text-foreground/60 hover:bg-muted hover:text-foreground'
                       )}
                     >
                       {label}

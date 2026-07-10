@@ -93,7 +93,7 @@ function drawClassic(ctx: CanvasRenderingContext2D, W: number, H: number, hands:
     }
 
     // Landmarks
-    ctx.fillStyle = '#a78bfa';
+    ctx.fillStyle = '#2dd4bf';
     for (let i = 0; i < 21; i++) {
       const lm = hand[i];
       if (!lm) continue;
@@ -162,11 +162,27 @@ function drawFancy(
         ctx.fill();
       }
 
-      // 2. Neon wireframe — one shadow setup outside the loop.
+      // 2. Neon wireframe — every stroke() with an active shadow pays the
+      // full blur cost, so the glow now comes from ONE shadowed stroke over a
+      // combined path of all 21 connections; the per-segment colored lines
+      // are drawn on top without shadow (cheap).
+      const midZ = (hand[0].z + hand[9].z + hand[12].z) / 3;
       ctx.save();
-      ctx.shadowColor = `hsla(280, 100%, 70%, 0.9)`;
-      ctx.shadowBlur = 12 + pulse * 6;
       ctx.lineCap = 'round';
+      ctx.shadowColor = `hsla(174, 100%, 70%, 0.9)`;
+      ctx.shadowBlur = 12 + pulse * 6;
+      ctx.strokeStyle = `hsla(${depthHue(midZ) | 0}, 100%, 70%, ${depthAlpha(midZ).toFixed(2)})`;
+      ctx.lineWidth = scaleWithDepth(midZ, 1.5, 5);
+      ctx.beginPath();
+      for (let ci = 0; ci < HAND_CONNECTIONS.length; ci++) {
+        const conn = HAND_CONNECTIONS[ci];
+        const si = conn[0], ei = conn[1];
+        if (!hand[si] || !hand[ei]) continue;
+        ctx.moveTo(_mappedX[si], _mappedY[si]);
+        ctx.lineTo(_mappedX[ei], _mappedY[ei]);
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
       for (let ci = 0; ci < HAND_CONNECTIONS.length; ci++) {
         const conn = HAND_CONNECTIONS[ci];
         const si = conn[0], ei = conn[1];
@@ -184,8 +200,9 @@ function drawFancy(
       }
       ctx.restore();
 
-      // 3. Joint orbs — fingertip orbs keep the radial gradient (visual
-      // anchor), but base joints become a flat fill with shadowBlur.
+      // 3. Joint orbs — halo + core flat fills. Per-joint save/restore +
+      // shadowBlur + per-frame radial gradients dominated frame cost; a
+      // larger low-alpha halo behind a bright core reads the same at 60fps.
       for (let i = 0; i < 21; i++) {
         const p = hand[i];
         const x = _mappedX[i], y = _mappedY[i];
@@ -194,27 +211,23 @@ function drawFancy(
         const isTip = FINGERTIP_SET.has(i);
         if (isTip) {
           const orbR = baseR * (1.2 + pulse * 0.4);
-          ctx.save();
-          ctx.shadowColor = `hsla(${hue}, 100%, 70%, 0.8)`;
-          ctx.shadowBlur = 18 + pulse * 10;
-          const grad = ctx.createRadialGradient(x, y, 0, x, y, orbR);
-          grad.addColorStop(0, `hsla(${hue}, 100%, 95%, 0.95)`);
-          grad.addColorStop(0.5, `hsla(${hue}, 100%, 70%, 0.7)`);
-          grad.addColorStop(1, `hsla(${hue + 20}, 100%, 50%, 0.0)`);
-          ctx.fillStyle = grad;
+          ctx.fillStyle = `hsla(${hue}, 100%, 70%, 0.35)`;
+          ctx.beginPath();
+          ctx.arc(x, y, orbR * 1.9, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = `hsla(${hue}, 100%, 92%, 0.95)`;
           ctx.beginPath();
           ctx.arc(x, y, orbR, 0, Math.PI * 2);
           ctx.fill();
-          ctx.restore();
         } else {
-          ctx.save();
-          ctx.shadowColor = `hsla(${hue}, 100%, 70%, 0.8)`;
-          ctx.shadowBlur = 8;
+          ctx.fillStyle = `hsla(${hue}, 100%, 70%, 0.3)`;
+          ctx.beginPath();
+          ctx.arc(x, y, baseR * 1.6, 0, Math.PI * 2);
+          ctx.fill();
           ctx.fillStyle = `hsla(${hue}, 100%, 75%, 0.9)`;
           ctx.beginPath();
           ctx.arc(x, y, baseR, 0, Math.PI * 2);
           ctx.fill();
-          ctx.restore();
         }
       }
 
@@ -239,8 +252,11 @@ function drawFancy(
   }
 
   // 5. Update & draw particles — in-place compaction (no new array).
+  // Additive blending ('lighter') gives the glow; per-particle shadowBlur
+  // was by far the most expensive operation in the whole frame (hundreds of
+  // shadowed arcs per frame → the lag users saw).
   let write = 0;
-  ctx.shadowBlur = 6;
+  ctx.globalCompositeOperation = 'lighter';
   for (let read = 0; read < particles.length; read++) {
     const p = particles[read];
     p.life -= dt * 0.0015;
@@ -253,7 +269,6 @@ function drawFancy(
     const hue = p.hue | 0;
     ctx.globalAlpha = t * 0.8;
     ctx.fillStyle = `hsla(${hue}, 100%, 75%, ${t.toFixed(2)})`;
-    ctx.shadowColor = `hsla(${hue}, 100%, 60%, ${(t * 0.6).toFixed(2)})`;
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.size * t, 0, Math.PI * 2);
     ctx.fill();
@@ -261,7 +276,7 @@ function drawFancy(
   particles.length = write;
   if (write > maxParticles) particles.splice(0, write - maxParticles);
   ctx.globalAlpha = 1;
-  ctx.shadowBlur = 0;
+  ctx.globalCompositeOperation = 'source-over';
   return particles;
 }
 
@@ -387,18 +402,18 @@ export default function JustShowYourHandsClient() {
   if (!isGameStarted) {
     return (
       <div className="container mx-auto px-4 py-4 lg:py-8 flex flex-col items-center justify-start lg:justify-center flex-grow">
-        <Card className="max-w-md text-center">
+        <Card className="max-w-md text-center rounded-2xl border-2 border-emerald-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-emerald-500/40 text-white">
           <CardHeader>
-            <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full border-2 border-emerald-400/40 bg-emerald-500/15 text-emerald-400">
               <Hand className="h-10 w-10" />
             </div>
-            <CardTitle className="font-headline text-3xl">Hand Tracking Demo</CardTitle>
-            <CardDescription className="text-muted-foreground pt-2">
+            <CardTitle className="font-headline font-bold text-3xl text-white"><span className="text-emerald-400">Hand</span> Tracking Demo</CardTitle>
+            <CardDescription className="text-white/70 pt-2">
               See real-time hand tracking with three visual modes: Classic skeleton, Neon glow, and dense 3D Mesh wireframe.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <Button onClick={startGame} size="lg">Start Demo</Button>
+            <Button onClick={startGame} size="lg" className="rounded-xl border-2 border-white/80 bg-emerald-500 font-headline font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-emerald-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Start Demo</Button>
           </CardContent>
         </Card>
       </div>
@@ -407,7 +422,7 @@ export default function JustShowYourHandsClient() {
 
   return (
     <div className="container mx-auto px-4 py-4 lg:py-8 flex flex-col items-center justify-start lg:justify-center flex-grow">
-      <div className={`w-full max-w-4xl aspect-[3/4] lg:aspect-video relative rounded-lg shadow-lg overflow-hidden ${visualMode === 'classic' ? 'bg-muted' : 'bg-black'}`}>
+      <div className={`w-full max-w-4xl aspect-[3/4] lg:aspect-video relative rounded-2xl border-2 border-emerald-400/50 shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-emerald-500/30 overflow-hidden ${visualMode === 'classic' ? 'bg-black' : 'bg-black'}`}>
         <video
           ref={videoRef}
           autoPlay playsInline muted
@@ -418,22 +433,22 @@ export default function JustShowYourHandsClient() {
 
         {(isLoading || (error && !videoRef.current?.srcObject)) && (
           <div className="absolute inset-0 bg-black/60 flex flex-col gap-4 items-center justify-center rounded-lg text-white z-30">
-            <Loader className="h-16 w-16 animate-spin" />
-            <p className="font-headline text-3xl">{isLoading ? 'Loading Model...' : 'Waiting for Camera...'}</p>
+            <Loader className="h-16 w-16 animate-spin text-emerald-400" />
+            <p className="font-headline font-bold text-3xl">{isLoading ? 'Loading Model...' : 'Waiting for Camera...'}</p>
           </div>
         )}
 
         {error && (
-          <div className="absolute top-4 left-4 right-4 bg-destructive/80 text-destructive-foreground p-4 rounded-md z-20">
-            <p className="font-bold">Error:</p>
+          <div className="absolute top-4 left-4 right-4 rounded-2xl border-2 border-red-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-red-500/40 text-red-400 p-4 z-20">
+            <p className="font-headline font-bold">Error:</p>
             <p>{error}</p>
           </div>
         )}
 
         <div className="absolute bottom-4 left-0 right-0 flex justify-center items-center z-20">
-          <Card className="bg-background/70 backdrop-blur-md p-2 px-5 flex items-center gap-3">
-            {visualMode === 'fancy' ? <Sparkles className="h-4 w-4 text-primary" /> : <Hand className="h-4 w-4 text-primary" />}
-            <p className="font-headline text-lg">
+          <Card className="rounded-full border-2 border-white/20 bg-black/60 backdrop-blur py-1.5 px-5 flex items-center gap-3 text-white">
+            {visualMode === 'fancy' ? <Sparkles className="h-4 w-4 text-emerald-400" /> : <Hand className="h-4 w-4 text-emerald-400" />}
+            <p className="font-headline font-bold text-lg">
               {landmarks.length > 0
                 ? `${landmarks.length} hand${landmarks.length > 1 ? 's' : ''} detected \u2022 ${detectedFingers} finger${detectedFingers !== 1 ? 's' : ''}`
                 : 'Show your hands to the camera'}
@@ -443,16 +458,27 @@ export default function JustShowYourHandsClient() {
 
         {/* Top controls */}
         <div className="absolute top-4 left-4 right-4 flex justify-between z-20">
-          <Button variant="secondary" onClick={handleBack}>Back to Start</Button>
+          <Button variant="secondary" onClick={handleBack} className="rounded-xl border-2 border-white/40 bg-white/10 font-headline font-bold text-white backdrop-blur transition-all hover:bg-white/20">Back to Start</Button>
           <Button
             variant={visualMode !== 'classic' ? 'default' : 'secondary'}
             onClick={() => setVisualMode(m => m === 'classic' ? 'fancy' : m === 'fancy' ? 'mesh' : 'classic')}
-            className="flex items-center gap-2"
+            className={`flex items-center gap-2 rounded-xl border-2 font-headline font-bold text-white backdrop-blur transition-all ${visualMode !== 'classic' ? 'border-white/80 bg-emerald-500 shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] hover:translate-y-[2px] hover:bg-emerald-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]' : 'border-white/40 bg-white/10 hover:bg-white/20'}`}
           >
             <Sparkles className="h-4 w-4" />
             {visualMode === 'classic' ? 'Classic' : visualMode === 'fancy' ? 'Neon' : 'Gauntlet'}
           </Button>
         </div>
+      </div>
+
+      {/* Instructions */}
+      <div className="w-full max-w-4xl mt-6 p-6 rounded-2xl border-2 border-emerald-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-emerald-500/40">
+        <h3 className="text-xl font-headline font-bold text-emerald-400 mb-3">How it Works</h3>
+        <ul className="text-gray-300 space-y-2">
+          <li>✋ Hold your hands up to the camera to see them tracked in real-time</li>
+          <li>✨ Toggle between Classic, Neon, and Gauntlet visual modes at the top right</li>
+          <li>🎯 Watch how the app accurately detects your fingers and hand joints</li>
+          <li>💡 Move your hands closer or further to see the depth effects!</li>
+        </ul>
       </div>
     </div>
   );

@@ -199,10 +199,10 @@ export default function MathChallenge2Client() {
   const renderGameState = () => {
     if (gameState === 'IDLE') {
       return (
-        <Card className="max-w-md w-full p-6">
+        <Card className="max-w-md w-full p-6 rounded-2xl border-2 border-sky-400/70 bg-black/75 text-white backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-sky-500/40">
           <CardContent className="pt-6 text-center">
-            <h2 className="font-headline text-3xl mb-4">Math Challenge 2</h2>
-            <p className="text-muted-foreground mb-8">
+            <h2 className="font-headline font-bold text-3xl mb-4">Math <span className="text-sky-400">Challenge 2</span></h2>
+            <p className="text-white/70 mb-8">
               Pop the bubbles with your hand to answer math questions that get harder as you go!
             </p>
             
@@ -219,7 +219,7 @@ export default function MathChallenge2Client() {
             </div>
             
             {isMobile && (
-              <Alert className="mb-4 text-left">
+              <Alert className="mb-4 text-left rounded-xl border-2 border-white/40 bg-white/10 text-white">
                 <Smartphone className="h-4 w-4" />
                 <AlertTitle>Mobile Experience</AlertTitle>
                 <AlertDescription>
@@ -227,7 +227,7 @@ export default function MathChallenge2Client() {
                 </AlertDescription>
               </Alert>
             )}
-            <Button onClick={startGame} size="lg" className="font-headline text-lg w-full">Start Game</Button>
+            <Button onClick={startGame} size="lg" className="font-headline font-bold text-lg w-full rounded-xl border-2 border-white/80 bg-sky-500 text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-sky-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Start Game</Button>
           </CardContent>
         </Card>
       );
@@ -238,7 +238,7 @@ export default function MathChallenge2Client() {
 
     return (
       <div className="w-full max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-        <div ref={videoContainerRef} className="relative w-full aspect-[3/4] lg:aspect-video rounded-lg overflow-hidden bg-muted shadow-lg lg:col-span-2">
+        <div ref={videoContainerRef} className="relative w-full aspect-[3/4] lg:aspect-video rounded-2xl border-2 border-sky-400/70 overflow-hidden bg-black/60 shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-sky-500/40 lg:col-span-2">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover scale-x-[-1]"></video>
           
           {gameState === 'PLAYING' && (
@@ -268,49 +268,60 @@ export default function MathChallenge2Client() {
           )}
         
           {gameState === 'PLAYING' && (
-             <Target ref={pointerRef} className="absolute top-0 left-0 text-cyan-400 w-6 h-6 -translate-x-1/2 -translate-y-1/2 transition-transform duration-75 ease-out" style={{pointerEvents: 'none'}} />
+             <Target ref={pointerRef} className="absolute top-0 left-0 text-sky-300 w-6 h-6 -translate-x-1/2 -translate-y-1/2 transition-transform duration-75 ease-out" style={{pointerEvents: 'none'}} />
           )}
 
         </div>
 
         <div className="flex flex-col gap-4 w-full lg:col-span-1">
-            <Card className="w-full p-6 text-center flex items-center justify-center flex-grow min-h-[140px] lg:min-h-[200px]">
+            <Card className="w-full p-6 text-center flex items-center justify-center flex-grow min-h-[140px] lg:min-h-[200px] rounded-2xl border-2 border-white/20 bg-black/60 text-white backdrop-blur">
                <div className="flex items-center justify-center h-full">
                 {gameState === 'LOADING_PROBLEM' ? (
-                  <Loader className="h-12 w-12 animate-spin text-primary" />
+                  <Loader className="h-12 w-12 animate-spin text-sky-400" />
                 ) : (
-                  <p className="font-headline text-3xl md:text-4xl tracking-wide">
+                  <p className="font-headline font-bold text-3xl md:text-4xl tracking-wide">
                     {currentProblem?.problem || 'Loading...'}
                   </p>
                 )}
               </div>
             </Card>
 
-            <Card className="w-full p-4">
+            <Card className="w-full p-4 rounded-2xl border-2 border-white/20 bg-black/60 text-white backdrop-blur">
               <div className="flex justify-between items-center text-lg gap-4">
                 <div className="flex flex-col items-center">
-                  <span className="font-bold text-primary text-sm">SCORE</span>
-                  <span className="font-headline text-4xl">{score}</span>
+                  <span className="font-headline font-bold text-sky-400 text-sm">SCORE</span>
+                  <span className="font-headline font-bold text-4xl text-sky-300">{score}</span>
                 </div>
                  <div className="flex flex-col items-center">
-                   <span className="text-muted-foreground text-sm flex items-center gap-1"><Timer className="h-4 w-4" /> TIME</span>
-                  <span className="font-headline text-4xl w-20 text-center">{gameState === 'PLAYING' ? timeLeft : '...'}</span>
+                   <span className="text-white/60 text-sm flex items-center gap-1"><Timer className="h-4 w-4" /> TIME</span>
+                  <span className="font-headline font-bold text-4xl w-20 text-center">{gameState === 'PLAYING' ? timeLeft : '...'}</span>
                 </div>
               </div>
                {gameState === 'PLAYING' && (
                  <div className="mt-2 text-center">
-                   <p className="text-sm text-muted-foreground">Pop the correct bubble!</p>
+                   <p className="text-sm text-white/60">Pop the correct bubble!</p>
                    <Progress value={(timeLeft / problemTimerDuration) * 100} className="w-full h-2 mt-1" />
                  </div>
               )}
                {gameState === 'FEEDBACK' && currentProblem && (
                  <div className="mt-2 text-center">
-                   <p className="text-sm text-muted-foreground">
+                   <p className="text-sm text-white/70">
                     {feedback === 'correct' ? `You got it!` : `The correct answer was ${currentProblem.correctAnswer}.`}
                     </p>
                  </div>
               )}
             </Card>
+
+            {/* Instructions */}
+            <div className="mt-4 p-6 rounded-2xl border-2 border-sky-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-sky-500/40">
+              <h3 className="text-xl font-headline font-bold text-sky-400 mb-3">How to Play</h3>
+              <ul className="text-gray-300 space-y-2">
+                <li>✋ Read the math problem on the screen</li>
+                <li>👆 Use your index finger to point at the correct answer bubble</li>
+                <li>💥 Touch the bubble to pop it and submit your answer</li>
+                <li>🏆 Answer correctly before the time runs out!</li>
+              </ul>
+            </div>
         </div>
       </div>
     );

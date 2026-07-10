@@ -231,22 +231,22 @@ export default function AirPianoClient() {
     // --- Drawing ---
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
     for (let i = 0; i < LANE_COUNT; i++) {
-      ctx.fillStyle = '#2a2a2a';
+      ctx.fillStyle = '#16282c';
       ctx.fillRect(i * LANE_WIDTH, 0, LANE_WIDTH - 2, GAME_HEIGHT);
     }
     for (let i = 0; i < LANE_COUNT; i++) {
       const state = tileStatesRef.current[i];
-      if (gameState !== 'PLAYING') ctx.fillStyle = '#444';
-      else if (state === 'target') ctx.fillStyle = '#FFD700';
-      else if (state === 'success') ctx.fillStyle = '#4CAF50';
-      else if (state === 'fail') ctx.fillStyle = '#FF6B6B';
-      else ctx.fillStyle = '#444';
+      if (gameState !== 'PLAYING') ctx.fillStyle = '#3a4d52';
+      else if (state === 'target') ctx.fillStyle = '#fbbf24';
+      else if (state === 'success') ctx.fillStyle = '#34d399';
+      else if (state === 'fail') ctx.fillStyle = '#ff5c5c';
+      else ctx.fillStyle = '#3a4d52';
       ctx.fillRect(i * LANE_WIDTH + 10, GAME_HEIGHT - TILE_HEIGHT, LANE_WIDTH - 20, TILE_HEIGHT);
     }
     smoothedFingersRef.current.forEach((pos, index) => {
       if (!pos) return;
       const isInTapZone = pos.y > GAME_HEIGHT - TAP_ZONE_HEIGHT;
-      ctx.fillStyle = isInTapZone ? '#4CAF50' : '#ffffff50';
+      ctx.fillStyle = isInTapZone ? '#34d399' : '#ffffff50';
       ctx.beginPath();
       ctx.arc(pos.x, pos.y, 10, 0, Math.PI * 2);
       ctx.fill();
@@ -257,7 +257,7 @@ export default function AirPianoClient() {
       if (age >= p.life) return;
       const progress = age / p.life;
       const alpha = 1 - progress;
-      ctx.fillStyle = `rgba(76, 175, 80, ${alpha})`;
+      ctx.fillStyle = `rgba(52, 211, 153, ${alpha})`;
       ctx.beginPath();
       ctx.arc(p.x, p.y, PARTICLE_CONFIG.SIZE, 0, Math.PI * 2);
       ctx.fill();
@@ -342,19 +342,19 @@ export default function AirPianoClient() {
 
   const renderOverlayContent = () => {
     if (isHandTrackingLoading && gameState === 'LOADING') {
-        return <div className="absolute inset-0 bg-black/60 flex flex-col gap-4 items-center justify-center rounded-lg text-white z-30"><Loader className="h-16 w-16 animate-spin" /><p className="font-headline text-3xl">Loading Hand Tracking...</p></div>;
+        return <div className="absolute inset-0 bg-black/75 backdrop-blur-md flex flex-col gap-4 items-center justify-center rounded-2xl text-white z-30"><Loader className="h-16 w-16 animate-spin text-rose-400" /><p className="font-headline font-bold text-3xl">Loading Hand Tracking...</p></div>;
     }
     
     if (gameState === 'GAME_OVER') {
         return (
-            <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-white z-40">
-                <h2 className="font-headline text-4xl text-red-500 mb-4">Game Over!</h2>
-                <p className="text-xl mb-2">Final Score: {score}</p>
-                <p className="text-lg mb-2">High Score: {highScore}</p>
+            <div className="absolute inset-0 bg-black/75 backdrop-blur-md rounded-2xl border-2 border-rose-400/70 shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-rose-500/40 flex flex-col items-center justify-center text-white z-40">
+                <h2 className="font-headline font-bold text-4xl text-red-400 mb-4">Game Over!</h2>
+                <p className="text-xl mb-2">Final Score: <span className="font-headline font-bold text-rose-300">{score}</span></p>
+                <p className="text-lg mb-2">High Score: <span className="font-headline font-bold text-yellow-400">{highScore}</span></p>
                 <p className="text-md mb-6">Mode: {gameMode && GAME_MODES[gameMode].name}</p>
                 <div className="flex gap-4">
-                    <Button onClick={restartGame}>Retry</Button>
-                    <Button onClick={exitGame} variant="secondary">Exit</Button>
+                    <Button onClick={restartGame} className="rounded-xl border-2 border-white/80 bg-rose-500 font-headline font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-rose-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Retry</Button>
+                    <Button onClick={exitGame} variant="secondary" className="rounded-xl border-2 border-white/40 bg-white/10 font-headline font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-white/20 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Exit</Button>
                 </div>
             </div>
         );
@@ -363,12 +363,12 @@ export default function AirPianoClient() {
     if (gameState === 'IDLE') {
       return (
         <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-white z-40">
-            <Card className="max-w-md w-full text-center p-6 bg-gray-900/80 border-gray-700">
+            <Card className="max-w-md w-full text-center p-6 rounded-2xl border-2 border-rose-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-rose-500/40">
                 <CardContent className="pt-6">
-                    <h2 className="font-headline text-4xl text-green-400 mb-4">Air Piano</h2>
-                    <p className="text-muted-foreground mb-6">Use your fingers to tap the notes as they reach the bottom!</p>
+                    <h2 className="font-headline font-bold text-4xl text-white mb-4">Air <span className="text-rose-400">Piano</span></h2>
+                    <p className="text-gray-300 mb-6">Use your fingers to tap the notes as they reach the bottom!</p>
                     {isMobile && (
-                      <Alert className="mb-4 text-left">
+                      <Alert className="mb-4 text-left rounded-xl border-2 border-white/20 bg-black/60 text-white">
                         <Smartphone className="h-4 w-4" />
                         <AlertTitle>Mobile Experience</AlertTitle>
                         <AlertDescription>
@@ -376,7 +376,7 @@ export default function AirPianoClient() {
                         </AlertDescription>
                       </Alert>
                     )}
-                    <Button onClick={() => setGameState('SELECT_MODE')} size="lg" className="font-headline text-lg w-full">Start Game</Button>
+                    <Button onClick={() => setGameState('SELECT_MODE')} size="lg" className="font-headline font-bold text-lg w-full rounded-xl border-2 border-white/80 bg-rose-500 text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-rose-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Start Game</Button>
                 </CardContent>
             </Card>
         </div>
@@ -386,12 +386,12 @@ export default function AirPianoClient() {
     if (gameState === 'SELECT_MODE') {
       return (
          <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-white z-40">
-            <Card className="max-w-md w-full text-center p-6 bg-gray-900/80 border-gray-700">
+            <Card className="max-w-md w-full text-center p-6 rounded-2xl border-2 border-rose-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-rose-500/40">
                 <CardContent className="pt-6">
-                    <h2 className="font-headline text-3xl mb-6">Select Difficulty</h2>
+                    <h2 className="font-headline font-bold text-3xl mb-6 text-white">Select <span className="text-rose-400">Difficulty</span></h2>
                     <div className="flex gap-4 justify-center">
-                        <Button onClick={() => selectMode('EASY')} size="lg">Easy</Button>
-                        <Button onClick={() => selectMode('HARD')} size="lg" variant="destructive">Hard</Button>
+                        <Button onClick={() => selectMode('EASY')} size="lg" className="rounded-xl border-2 border-white/80 bg-rose-500 font-headline font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-rose-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Easy</Button>
+                        <Button onClick={() => selectMode('HARD')} size="lg" variant="destructive" className="rounded-xl border-2 border-white/80 font-headline font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Hard</Button>
                     </div>
                 </CardContent>
             </Card>
@@ -406,19 +406,33 @@ export default function AirPianoClient() {
     <div className="container mx-auto px-4 py-4 lg:py-8 flex flex-col items-center justify-start lg:justify-center min-h-screen">
       <div className="w-full flex flex-col lg:flex-row items-center justify-center gap-8">
         {/* Camera Feed */}
-        <div className="relative w-full lg:max-w-[400px] aspect-[3/4] lg:aspect-[4/5] rounded-lg overflow-hidden bg-muted shadow-lg">
+        <div className="relative w-full lg:max-w-[400px] aspect-[3/4] lg:aspect-[4/5] rounded-2xl overflow-hidden bg-black border-2 border-rose-400/70 shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-rose-500/40">
             <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover scale-x-[-1]"></video>
             {isHandTrackingLoading && !videoRef.current?.srcObject && <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-white"><Loader className="h-12 w-12 animate-spin" /></div>}
         </div>
-        {/* Game Canvas */}
-        <div className="relative w-full" style={{maxWidth: LANE_COUNT * LANE_WIDTH, aspectRatio: `${LANE_COUNT * LANE_WIDTH} / ${GAME_HEIGHT}`}}>
-            <canvas
-                ref={canvasRef}
-                width={LANE_COUNT * LANE_WIDTH}
-                height={GAME_HEIGHT}
-                className="w-full h-full rounded-lg shadow-lg bg-gradient-to-b from-gray-800 to-gray-900"
-            />
-             {renderOverlayContent()}
+        {/* Game Area */}
+        <div className="flex flex-col w-full gap-6" style={{maxWidth: LANE_COUNT * LANE_WIDTH}}>
+          {/* Game Canvas */}
+          <div className="relative w-full" style={{aspectRatio: `${LANE_COUNT * LANE_WIDTH} / ${GAME_HEIGHT}`}}>
+              <canvas
+                  ref={canvasRef}
+                  width={LANE_COUNT * LANE_WIDTH}
+                  height={GAME_HEIGHT}
+                  className="w-full h-full rounded-2xl border-2 border-rose-400/70 shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-rose-500/40 bg-gradient-to-b from-gray-800 to-gray-900"
+              />
+               {renderOverlayContent()}
+          </div>
+          
+          {/* Instructions */}
+          <div className="p-6 rounded-2xl border-2 border-rose-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-rose-500/40">
+            <h3 className="text-xl font-headline font-bold text-rose-400 mb-3">How to Play</h3>
+            <ul className="text-gray-300 space-y-2">
+              <li>✋ Position your hand so your fingers align with the lanes</li>
+              <li>🎵 Tap down with your finger when a yellow target appears in its lane</li>
+              <li>⚡ 3 mistakes and it's game over!</li>
+              <li>🏆 Select Hard mode for a faster challenge!</li>
+            </ul>
+          </div>
         </div>
       </div>
     </div>

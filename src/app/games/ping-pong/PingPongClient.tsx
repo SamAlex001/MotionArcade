@@ -10,6 +10,15 @@ const PADDLE_WIDTH = 120;
 const PADDLE_HEIGHT = 15;
 const BALL_RADIUS = 12;
 const BALL_SPEED_PPS = 200; // pixels per second (frame-rate independent)
+const SPEED_INCREASE_PER_POINT = 0.05; // +5% ball speed per point scored
+// Speed ramps +5% per point until 4x (reached at 60 points); beyond that it
+// keeps growing, but only +5% every 5 points.
+const FAST_RAMP_LIMIT = 4;
+const FAST_RAMP_SCORE = (FAST_RAMP_LIMIT - 1) / SPEED_INCREASE_PER_POINT; // 60
+const speedMultiplierFor = (score: number) =>
+  score <= FAST_RAMP_SCORE
+    ? 1 + score * SPEED_INCREASE_PER_POINT
+    : FAST_RAMP_LIMIT + Math.floor((score - FAST_RAMP_SCORE) / 5) * SPEED_INCREASE_PER_POINT;
 const MAX_PARTICLES = 100; // Limit particles for performance
 const TRAIL_LENGTH = 5; // Reduced from 10 for better performance
 
@@ -40,6 +49,13 @@ export default function PingPongClient() {
   const [gameOver, setGameOver] = useState(false);
   const [combo, setCombo] = useState(0);
 
+  // The rAF loop re-schedules itself with the closure it was started from, so
+  // it never sees later state updates. Loop logic must read these refs instead
+  // of the state values (state remains the source for the React UI).
+  const gameOverRef = useRef(false);
+  const comboRef = useRef(0);
+  const scoreRef = useRef(0);
+
   // Particle effects
   const particles = useRef<Particle[]>([]);
 
@@ -67,6 +83,9 @@ export default function PingPongClient() {
     setScore(0);
     setCombo(0);
     setGameOver(false);
+    gameOverRef.current = false;
+    comboRef.current = 0;
+    scoreRef.current = 0;
     particles.current = [];
     ballTrail.current = [];
     ball.current.x = gameCanvas.width / 2;
@@ -112,7 +131,7 @@ export default function PingPongClient() {
   };
 
   const update = (dt: number) => {
-    if (gameOver) return;
+    if (gameOverRef.current) return;
     const gameCanvas = gameCanvasRef.current;
     if (!gameCanvas) return;
 
@@ -126,14 +145,23 @@ export default function PingPongClient() {
     ball.current.x += ball.current.vx * dt;
     ball.current.y += ball.current.vy * dt;
 
-    // Ball collision with walls
-    if (ball.current.x - BALL_RADIUS < 0 || ball.current.x + BALL_RADIUS > gameCanvas.width) {
-      ball.current.vx = -ball.current.vx;
-      createParticles(ball.current.x, ball.current.y, '#3b82f6', 5); // Reduced particles
+    // Ball collision with walls. Position is clamped back inside the bounds
+    // and velocity forced away from the wall — a pure sign-flip lets a fast
+    // ball that penetrated the wall flip direction every frame while still
+    // outside, oscillate, and escape the canvas.
+    if (ball.current.x - BALL_RADIUS < 0) {
+      ball.current.x = BALL_RADIUS;
+      ball.current.vx = Math.abs(ball.current.vx);
+      createParticles(ball.current.x, ball.current.y, '#2dd4bf', 5); // Reduced particles
+    } else if (ball.current.x + BALL_RADIUS > gameCanvas.width) {
+      ball.current.x = gameCanvas.width - BALL_RADIUS;
+      ball.current.vx = -Math.abs(ball.current.vx);
+      createParticles(ball.current.x, ball.current.y, '#2dd4bf', 5); // Reduced particles
     }
     if (ball.current.y - BALL_RADIUS < 0) {
-      ball.current.vy = -ball.current.vy;
-      createParticles(ball.current.x, ball.current.y, '#3b82f6', 5); // Reduced particles
+      ball.current.y = BALL_RADIUS;
+      ball.current.vy = Math.abs(ball.current.vy);
+      createParticles(ball.current.x, ball.current.y, '#2dd4bf', 5); // Reduced particles
     }
 
     // Ball collision with paddle
@@ -150,16 +178,22 @@ export default function PingPongClient() {
       const maxAngle = Math.PI / 3; // 60 degrees
       const angle = hitPoint * maxAngle;
       
-      // Maintain constant speed by normalizing the velocity vector
-      const speed = Math.sqrt(ball.current.vx * ball.current.vx + ball.current.vy * ball.current.vy);
-      ball.current.vx = Math.sin(angle) * speed;
-      ball.current.vy = -Math.cos(angle) * speed;
-      
       setScore((s) => s + 1);
       setCombo((c) => c + 1);
-      
+      comboRef.current += 1;
+      scoreRef.current += 1;
+
+      // Ball speed scales with score: +5% per point up to 4x, then +5% per
+      // 5 points beyond that.
+      const speed = BALL_SPEED_PPS * speedMultiplierFor(scoreRef.current);
+      ball.current.vx = Math.sin(angle) * speed;
+      ball.current.vy = -Math.cos(angle) * speed;
+      // Clamp the ball above the paddle so a fast frame can't leave it below
+      // the paddle line and trigger the game-over check right after bouncing.
+      ball.current.y = gameCanvas.height - PADDLE_HEIGHT - BALL_RADIUS;
+
       // Create colorful particles on hit
-      const hitColor = combo > 5 ? '#fbbf24' : combo > 2 ? '#10b981' : '#3b82f6';
+      const hitColor = comboRef.current > 5 ? '#fbbf24' : comboRef.current > 2 ? '#10b981' : '#2dd4bf';
       createParticles(ball.current.x, ball.current.y, hitColor, 10); // Reduced particles
     }
 
@@ -167,9 +201,11 @@ export default function PingPongClient() {
     if (ball.current.y + BALL_RADIUS > gameCanvas.height) {
       setGameOver(true);
       setCombo(0);
+      gameOverRef.current = true;
+      comboRef.current = 0;
       ball.current.vx = 0;
       ball.current.vy = 0;
-      createParticles(ball.current.x, gameCanvas.height, '#ef4444', 20); // Reduced particles
+      createParticles(ball.current.x, gameCanvas.height, '#ff5c5c', 20); // Reduced particles
     }
 
     // Update particles — in-place compaction, no new array.
@@ -211,8 +247,8 @@ export default function PingPongClient() {
     const bgKey = `${gameCanvas.width}x${gameCanvas.height}`;
     if (cachedBgKey.current !== bgKey || !cachedBgGradient.current) {
       const g = ctx.createLinearGradient(0, 0, 0, gameCanvas.height);
-      g.addColorStop(0, '#0f172a');
-      g.addColorStop(1, '#1e293b');
+      g.addColorStop(0, '#0b1a1e');
+      g.addColorStop(1, '#10262b');
       cachedBgGradient.current = g;
       cachedBgKey.current = bgKey;
       cachedPaddleGradients.current = {}; // paddle gradients depend on dims
@@ -221,7 +257,7 @@ export default function PingPongClient() {
     ctx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
 
     // Simplified grid pattern (draw fewer lines)
-    ctx.strokeStyle = 'rgba(59, 130, 246, 0.1)';
+    ctx.strokeStyle = 'rgba(45, 212, 191, 0.1)';
     ctx.lineWidth = 1;
     for (let i = 0; i < gameCanvas.height; i += 60) { // Doubled spacing for performance
       ctx.beginPath();
@@ -231,7 +267,7 @@ export default function PingPongClient() {
     }
 
     // Draw center line
-    ctx.strokeStyle = 'rgba(59, 130, 246, 0.3)';
+    ctx.strokeStyle = 'rgba(45, 212, 191, 0.3)';
     ctx.lineWidth = 2;
     ctx.setLineDash([10, 10]);
     ctx.beginPath();
@@ -256,7 +292,7 @@ export default function PingPongClient() {
       const alpha = (1 - i / trailLength) * 0.4;
       ctx.globalAlpha = alpha;
       const size = BALL_RADIUS * (1 - i / trailLength);
-      ctx.fillStyle = '#60a5fa';
+      ctx.fillStyle = '#5eead4';
       ctx.beginPath();
       ctx.arc(trail.x, trail.y, size, 0, Math.PI * 2);
       ctx.fill();
@@ -266,7 +302,7 @@ export default function PingPongClient() {
     // Paddle gradient — three color tiers cached by x position bucket.
     // The gradient direction is horizontal across the paddle, so it shifts
     // with the paddle's x. We rebuild only when the bucket changes.
-    const tier = combo > 5 ? 'gold' : combo > 2 ? 'green' : 'blue';
+    const tier = comboRef.current > 5 ? 'gold' : comboRef.current > 2 ? 'green' : 'blue';
     const xBucket = Math.round(playerPaddle.current.x / 8) * 8;
     const paddleKey = `${tier}:${xBucket}`;
     let paddleGradient = cachedPaddleGradients.current[paddleKey];
@@ -286,9 +322,9 @@ export default function PingPongClient() {
         paddleGradient.addColorStop(0.5, '#059669');
         paddleGradient.addColorStop(1, '#10b981');
       } else {
-        paddleGradient.addColorStop(0, '#60a5fa');
-        paddleGradient.addColorStop(0.5, '#3b82f6');
-        paddleGradient.addColorStop(1, '#60a5fa');
+        paddleGradient.addColorStop(0, '#5eead4');
+        paddleGradient.addColorStop(0.5, '#2dd4bf');
+        paddleGradient.addColorStop(1, '#5eead4');
       }
       // Cap cache to avoid unbounded growth.
       const keys = Object.keys(cachedPaddleGradients.current);
@@ -305,8 +341,8 @@ export default function PingPongClient() {
     );
 
     // Draw ball with simplified rendering
-    ctx.fillStyle = '#60a5fa';
-    ctx.shadowColor = '#60a5fa';
+    ctx.fillStyle = '#5eead4';
+    ctx.shadowColor = '#5eead4';
     ctx.shadowBlur = 15; // Reduced from 20
     ctx.beginPath();
     ctx.arc(ball.current.x, ball.current.y, BALL_RADIUS, 0, Math.PI * 2);
@@ -314,12 +350,12 @@ export default function PingPongClient() {
     ctx.shadowBlur = 0;
 
     // Draw combo indicator (only when needed)
-    if (combo > 2) {
+    if (comboRef.current > 2) {
       ctx.font = 'bold 20px Arial'; // Slightly smaller
       ctx.textAlign = 'center';
-      const comboColor = combo > 5 ? '#fbbf24' : '#10b981';
+      const comboColor = comboRef.current > 5 ? '#fbbf24' : '#10b981';
       ctx.fillStyle = comboColor;
-      ctx.fillText(`${combo}x COMBO!`, gameCanvas.width / 2, 40);
+      ctx.fillText(`${comboRef.current}x COMBO!`, gameCanvas.width / 2, 40);
     }
   };
 
@@ -362,8 +398,8 @@ export default function PingPongClient() {
       <div className="w-full max-w-7xl">
         {/* Title Section */}
         <div className="text-center mb-6">
-          <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 bg-clip-text text-transparent mb-2">
-            ⚡ Ping Pong Master
+          <h1 className="text-5xl font-headline font-bold text-white mb-2">
+            ⚡ Ping Pong <span className="text-orange-400">Master</span>
           </h1>
           <p className="text-gray-400 text-lg">Control the paddle with your hand movements!</p>
         </div>
@@ -371,12 +407,12 @@ export default function PingPongClient() {
         <div className="flex flex-col lg:flex-row gap-8">
           <div className="lg:w-1/2 w-full">
             <div className="relative">
-              <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-cyan-600 rounded-lg blur opacity-25"></div>
-              <div className="relative aspect-[3/4] lg:aspect-[4/3] bg-black flex items-center justify-center rounded-lg overflow-hidden border-2 border-blue-500/50">
+              <div className="absolute -inset-1 bg-orange-500 rounded-2xl blur opacity-25"></div>
+              <div className="relative aspect-[3/4] lg:aspect-[4/3] bg-black flex items-center justify-center rounded-2xl overflow-hidden border-2 border-orange-400/70">
                 {isLoading && (
-                  <div className="absolute inset-0 bg-gradient-to-br from-slate-900 to-slate-800 flex flex-col gap-4 items-center justify-center text-white z-30">
-                    <Loader className="h-16 w-16 animate-spin text-blue-400" />
-                    <p className="font-headline text-3xl bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                  <div className="absolute inset-0 bg-black/75 backdrop-blur-md flex flex-col gap-4 items-center justify-center text-white z-30">
+                    <Loader className="h-16 w-16 animate-spin text-orange-400" />
+                    <p className="font-headline font-bold text-3xl text-white">
                       Loading Hand Tracking...
                     </p>
                   </div>
@@ -399,22 +435,22 @@ export default function PingPongClient() {
 
           <div className="lg:w-1/2 w-full">
             <div className="relative">
-              <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg blur opacity-25"></div>
-              <div className="relative aspect-[3/4] lg:aspect-[4/3] bg-black flex items-center justify-center rounded-lg overflow-hidden border-2 border-blue-500/50">
+              <div className="absolute -inset-1 bg-orange-500 rounded-2xl blur opacity-25"></div>
+              <div className="relative aspect-[3/4] lg:aspect-[4/3] bg-black flex items-center justify-center rounded-2xl overflow-hidden border-2 border-orange-400/70">
                 <canvas ref={gameCanvasRef} className="w-full h-full" />
                 
                 {/* Game Over Overlay */}
                 {gameOver && (
                   <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center text-white">
-                    <div className="bg-gradient-to-br from-slate-800 to-slate-900 p-8 rounded-2xl border-2 border-blue-500/50 shadow-2xl max-w-md mx-4">
+                    <div className="p-8 rounded-2xl border-2 border-orange-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-orange-500/40 max-w-md mx-4">
                       <Trophy className="w-16 h-16 mx-auto mb-4 text-yellow-400" />
-                      <h2 className="text-5xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
-                        Game Over!
+                      <h2 className="text-5xl font-headline font-bold mb-4 text-white">
+                        Game <span className="text-orange-400">Over!</span>
                       </h2>
                       <div className="space-y-3 mb-6">
                         <div className="flex justify-between items-center text-xl">
                           <span className="text-gray-400">Final Score:</span>
-                          <span className="font-bold text-blue-400 text-2xl">{score}</span>
+                          <span className="font-bold text-orange-300 text-2xl">{score}</span>
                         </div>
                         <div className="flex justify-between items-center text-xl">
                           <span className="text-gray-400">High Score:</span>
@@ -423,7 +459,7 @@ export default function PingPongClient() {
                       </div>
                       <button
                         onClick={resetGame}
-                        className="w-full bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white px-6 py-3 rounded-lg font-bold text-lg transition-all transform hover:scale-105 shadow-lg"
+                        className="w-full rounded-xl border-2 border-white/80 bg-orange-500 px-6 py-3 font-headline font-bold text-white text-lg shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-orange-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]"
                       >
                         Play Again
                       </button>
@@ -433,21 +469,25 @@ export default function PingPongClient() {
                 
                 {/* Score Display */}
                 <div className="absolute top-4 right-4 text-white text-right space-y-2">
-                  <div className="bg-black/50 backdrop-blur-sm px-4 py-2 rounded-lg border border-blue-500/50">
-                    <p className="text-sm text-gray-400">Score</p>
-                    <p className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                  <div className="rounded-full border-2 border-white/20 bg-black/60 px-4 py-1.5 backdrop-blur">
+                    <p className="text-sm font-headline text-gray-400">Score</p>
+                    <p className="text-3xl font-headline font-bold text-orange-300">
                       {score}
                     </p>
                   </div>
-                  <div className="bg-black/50 backdrop-blur-sm px-4 py-2 rounded-lg border border-yellow-500/50">
-                    <p className="text-sm text-gray-400">High Score</p>
-                    <p className="text-2xl font-bold text-yellow-400">{highScore}</p>
+                  <div className="rounded-full border-2 border-white/20 bg-black/60 px-4 py-1.5 backdrop-blur">
+                    <p className="text-sm font-headline text-gray-400">High Score</p>
+                    <p className="text-2xl font-headline font-bold text-yellow-400">{highScore}</p>
+                  </div>
+                  <div className="rounded-full border-2 border-white/20 bg-black/60 px-4 py-1.5 backdrop-blur">
+                    <p className="text-sm font-headline text-gray-400">Ball Speed</p>
+                    <p className="text-xl font-headline font-bold text-teal-300">{speedMultiplierFor(score).toFixed(2)}x</p>
                   </div>
                   {combo > 2 && (
-                    <div className="bg-gradient-to-r from-green-500/20 to-emerald-500/20 backdrop-blur-sm px-4 py-2 rounded-lg border border-green-500/50 animate-pulse">
+                    <div className="rounded-full border-2 border-green-500/50 bg-black/60 px-4 py-1.5 backdrop-blur animate-pulse">
                       <div className="flex items-center gap-2">
                         <Zap className="w-5 h-5 text-green-400" />
-                        <p className="text-xl font-bold text-green-400">{combo}x</p>
+                        <p className="text-xl font-headline font-bold text-green-400">{combo}x</p>
                       </div>
                     </div>
                   )}
@@ -459,15 +499,15 @@ export default function PingPongClient() {
             <div className="mt-4 flex justify-center">
               <button
                 onClick={resetGame}
-                className="bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white px-8 py-3 rounded-lg font-bold text-lg transition-all transform hover:scale-105 shadow-lg"
+                className="rounded-xl border-2 border-white/80 bg-orange-500 px-8 py-3 font-headline font-bold text-white text-lg shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-orange-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]"
               >
                 🎮 Restart Game
               </button>
             </div>
 
             {/* Instructions */}
-            <div className="mt-6 bg-gradient-to-br from-slate-800 to-slate-900 p-6 rounded-lg border border-blue-500/30">
-              <h3 className="text-xl font-bold text-blue-400 mb-3">How to Play</h3>
+            <div className="mt-6 p-6 rounded-2xl border-2 border-orange-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-orange-500/40">
+              <h3 className="text-xl font-headline font-bold text-orange-400 mb-3">How to Play</h3>
               <ul className="text-gray-300 space-y-2">
                 <li>✋ Move your hand left and right to control the paddle</li>
                 <li>⚡ Build combos by hitting the ball consecutively</li>

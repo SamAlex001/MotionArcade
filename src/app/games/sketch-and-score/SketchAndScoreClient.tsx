@@ -40,6 +40,7 @@ export default function SketchAndScoreClient() {
   const lastPosition = useRef<{ x: number, y: number } | null>(null);
   const midPointRef = useRef<{ x: number, y: number } | null>(null);
   const tenFingersHeldRef = useRef(false);
+  const lastTenFingerActionRef = useRef(0);
   const isMobile = useIsMobile();
   
   const { toast } = useToast();
@@ -119,7 +120,10 @@ export default function SketchAndScoreClient() {
     }
     lastPosition.current = null;
     midPointRef.current = null;
-    tenFingersHeldRef.current = false;
+    // Deliberately do NOT reset tenFingersHeldRef here: while the user is
+    // still holding 10 fingers up, resetting it would re-arm the gesture and
+    // clear the canvas again on the very next frame. The gesture effect
+    // resets it once the finger count drops below 10.
   }, [getDrawingContext]);
 
   const handleSubmit = async () => {
@@ -225,15 +229,21 @@ export default function SketchAndScoreClient() {
     
     // Prioritize the 10-finger clear gesture for desktop — edge-triggered so it
     // fires only once per gesture hold, not every frame while fingers are up.
+    // A cooldown guards against hand-tracking jitter (10 → 9 → 10 across
+    // frames) re-arming the trigger mid-hold.
     if (!isMobile && detectedFingers === 10) {
         if (!tenFingersHeldRef.current) {
             tenFingersHeldRef.current = true;
-            if (gameState === 'GET_READY') {
-              setCountdown(COUNTDOWN_SECONDS);
-              setGameState('COUNTDOWN');
-            } else if (gameState === 'DRAWING') {
-              clearCanvas();
-              toast({ title: "Canvas Cleared!" });
+            const now = performance.now();
+            if (now - lastTenFingerActionRef.current > 1500) {
+              lastTenFingerActionRef.current = now;
+              if (gameState === 'GET_READY') {
+                setCountdown(COUNTDOWN_SECONDS);
+                setGameState('COUNTDOWN');
+              } else if (gameState === 'DRAWING') {
+                clearCanvas();
+                toast({ title: "Canvas Cleared!" });
+              }
             }
         }
         return;
@@ -419,19 +429,19 @@ export default function SketchAndScoreClient() {
     if (gameState === 'IDLE') {
         return (
           <div className="flex items-center justify-center h-full">
-              <Card className="max-w-xl text-center p-8">
+              <Card className="max-w-xl text-center p-8 rounded-2xl border-2 border-amber-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-amber-500/40 text-white">
                   <CardHeader>
-                      <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
+                      <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full border-2 border-amber-400/40 bg-amber-500/15 text-amber-400">
                           <Pencil className="h-10 w-10" />
                       </div>
-                      <CardTitle className="font-headline text-4xl">Sketch &amp; Score</CardTitle>
-                      <CardDescription className="text-lg text-muted-foreground pt-2">
+                      <CardTitle className="font-headline font-bold text-4xl text-white">Sketch &amp; <span className="text-amber-400">Score</span></CardTitle>
+                      <CardDescription className="text-lg text-white/70 pt-2">
                         {isMobile ? "Which hand will you draw with?" : "Which hand will you use to draw?"}
                       </CardDescription>
                   </CardHeader>
                   <CardContent className="flex justify-center gap-4">
-                      <Button onClick={() => startGame('Left')} size="lg" className="font-headline text-xl">Left Hand</Button>
-                      <Button onClick={() => startGame('Right')} size="lg" className="font-headline text-xl">Right Hand</Button>
+                      <Button onClick={() => startGame('Left')} size="lg" className="font-headline text-xl rounded-xl border-2 border-white/80 bg-amber-500 font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Left Hand</Button>
+                      <Button onClick={() => startGame('Right')} size="lg" className="font-headline text-xl rounded-xl border-2 border-white/80 bg-amber-500 font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Right Hand</Button>
                   </CardContent>
               </Card>
           </div>
@@ -447,17 +457,17 @@ export default function SketchAndScoreClient() {
 
             {(isHandTrackingLoading || gameState === 'LOADING_CAMERA') && (
               <div className="absolute inset-0 bg-black/60 flex flex-col gap-4 items-center justify-center rounded-lg text-white z-30">
-                <Loader className="h-16 w-16 animate-spin" />
-                <p className="font-headline text-3xl">{gameState === 'LOADING_CAMERA' ? "Starting Camera..." : "Loading Hand Tracking..."}</p>
+                <Loader className="h-16 w-16 animate-spin text-amber-400" />
+                <p className="font-headline font-bold text-3xl">{gameState === 'LOADING_CAMERA' ? "Starting Camera..." : "Loading Hand Tracking..."}</p>
               </div>
             )}
 
             {shapeToDraw && !['IDLE', 'FEEDBACK', 'LOADING_CAMERA'].includes(gameState) && (
-              <Card className="absolute top-4 right-4 w-48 h-48 flex flex-col items-center justify-center bg-background/80 backdrop-blur-sm z-10">
+              <Card className="absolute top-4 right-4 w-48 h-48 flex flex-col items-center justify-center rounded-2xl border-2 border-amber-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-amber-500/40 z-10">
                 <CardHeader className="p-2 text-center">
-                  <CardTitle className="text-md font-headline">Draw This:</CardTitle>
+                  <CardTitle className="text-md font-headline font-bold text-white">Draw This:</CardTitle>
                 </CardHeader>
-                <CardContent className="p-2 flex-1 flex items-center justify-center text-primary">
+                <CardContent className="p-2 flex-1 flex items-center justify-center text-amber-400">
                   {shapeIcons[shapeToDraw.toLowerCase()] || <Pencil className="h-24 w-24" />}
                 </CardContent>
               </Card>
@@ -467,44 +477,44 @@ export default function SketchAndScoreClient() {
                 <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center rounded-lg text-white z-20 text-center p-4">
                   {isMobile ? (
                      <>
-                      <h2 className="font-headline text-5xl mb-4">Get Ready!</h2>
+                      <h2 className="font-headline font-bold text-5xl mb-4">Get <span className="text-amber-400">Ready!</span></h2>
                       <Button onClick={() => {
                         setCountdown(COUNTDOWN_SECONDS);
                         setGameState('COUNTDOWN');
-                      }} size="lg">Tap to Start</Button>
+                      }} size="lg" className="rounded-xl border-2 border-white/80 bg-amber-500 font-headline font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Tap to Start</Button>
                      </>
                   ): (
                     <>
-                      <h2 className="font-headline text-5xl mb-4">Show 10 Fingers to Start!</h2>
-                      <Hand className="h-24 w-24 animate-pulse" />
+                      <h2 className="font-headline font-bold text-5xl mb-4">Show <span className="text-amber-400">10 Fingers</span> to Start!</h2>
+                      <Hand className="h-24 w-24 animate-pulse text-amber-400" />
                     </>
                   )}
                 </div>
             )}
              {gameState === 'COUNTDOWN' && (
                 <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-lg z-20">
-                    <h2 className="font-headline text-9xl text-white">{countdown}</h2>
+                    <h2 className="font-headline font-bold text-9xl text-amber-400">{countdown}</h2>
                 </div>
             )}
             {gameState === 'DRAWING' && (
                 <div className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4 z-20">
                   <div className="flex justify-center w-full">
-                    <Button onClick={handleSubmit} size="lg" className="font-headline text-lg" >
+                    <Button onClick={handleSubmit} size="lg" className="font-headline text-lg rounded-xl border-2 border-white/80 bg-amber-500 font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]" >
                       <Sparkles className="mr-2"/> Submit Drawing
                     </Button>
                     {isMobile ? (
                       <div className="flex gap-2 ml-4">
-                        <Button onClick={() => setDrawingTool(t => t === 'PENCIL' ? 'ERASER' : 'PENCIL')} variant="outline" size="icon" className="h-12 w-12 bg-background/80">
+                        <Button onClick={() => setDrawingTool(t => t === 'PENCIL' ? 'ERASER' : 'PENCIL')} variant="outline" size="icon" className="h-12 w-12 rounded-xl border-2 border-white/40 bg-white/10 text-white backdrop-blur transition-all hover:bg-white/20">
                           {drawingTool === 'PENCIL' ? <Eraser/> : <Pencil/>}
                         </Button>
-                         <Button onClick={clearCanvas} variant="destructive" size="icon" className="h-12 w-12 bg-background/80">
+                         <Button onClick={clearCanvas} variant="destructive" size="icon" className="h-12 w-12 rounded-xl border-2 border-white/40 bg-red-500/80 text-white backdrop-blur transition-all hover:bg-red-600">
                           <XCircle/>
                         </Button>
                       </div>
                     ) : (
-                      <Card className="p-2 px-4 flex items-center gap-2 bg-background/80 ml-4">
-                        <span className="text-muted-foreground text-sm font-bold">TOOL:</span>
-                        {drawingTool === 'PENCIL' ? <Pencil className="h-6 w-6 text-primary"/> : <Eraser className="h-6 w-6 text-blue-400" />}
+                      <Card className="py-1.5 px-4 flex items-center gap-2 rounded-full border-2 border-white/20 bg-black/60 font-headline font-bold text-white backdrop-blur ml-4">
+                        <span className="text-white/60 text-sm font-bold">TOOL:</span>
+                        {drawingTool === 'PENCIL' ? <Pencil className="h-6 w-6 text-amber-400"/> : <Eraser className="h-6 w-6 text-teal-300" />}
                       </Card>
                     )}
                   </div>
@@ -512,23 +522,23 @@ export default function SketchAndScoreClient() {
             )}
              {gameState === 'SUBMITTING' && (
                 <div className="absolute inset-0 bg-black/60 flex flex-col gap-4 items-center justify-center rounded-lg text-white z-30">
-                    <Loader className="h-16 w-16 animate-spin" />
-                    <p className="font-headline text-3xl">AI is judging your art...</p>
+                    <Loader className="h-16 w-16 animate-spin text-amber-400" />
+                    <p className="font-headline font-bold text-3xl">AI is judging your art...</p>
                 </div>
             )}
              {gameState === 'FEEDBACK' && feedback && (
                  <div className="absolute inset-0 bg-black/70 flex flex-col gap-4 items-center justify-center rounded-lg text-white z-30 text-center p-4">
                     {feedback.isMatch ? <CheckCircle2 className="h-24 w-24 text-green-400" /> : <XCircle className="h-24 w-24 text-red-400" />}
-                    <h2 className="font-headline text-4xl max-w-lg">{feedback.message}</h2>
-                    <h3 className="text-2xl font-bold">Your Score: {score}</h3>
-                    <Button onClick={handleNextQuestion} size="lg" className="font-headline text-lg mt-4">Next Shape</Button>
+                    <h2 className="font-headline font-bold text-4xl max-w-lg">{feedback.message}</h2>
+                    <h3 className="text-2xl font-headline font-bold">Your Score: <span className="text-amber-300">{score}</span></h3>
+                    <Button onClick={handleNextQuestion} size="lg" className="font-headline text-lg mt-4 rounded-xl border-2 border-white/80 bg-amber-500 font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Next Shape</Button>
                 </div>
             )}
              {isMobile && gameState === 'DRAWING' && drawingTool === 'ERASER' && (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 w-4/5 max-w-xs z-20">
-                <Alert>
-                  <Eraser className="h-4 w-4" />
-                  <AlertTitle>Eraser Size</AlertTitle>
+                <Alert className="rounded-2xl border-2 border-amber-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-amber-500/40 text-white">
+                  <Eraser className="h-4 w-4 text-amber-400" />
+                  <AlertTitle className="font-headline font-bold">Eraser Size</AlertTitle>
                   <AlertDescription>
                      <input
                         type="range"
@@ -549,8 +559,20 @@ export default function SketchAndScoreClient() {
 
   return (
     <div className="container mx-auto px-4 py-4 lg:py-8 flex-grow flex flex-col items-center justify-start lg:justify-center">
-      <div className="w-full max-w-7xl aspect-[3/4] lg:aspect-video relative rounded-lg shadow-lg overflow-hidden bg-muted">
+      <div className="w-full max-w-7xl aspect-[3/4] lg:aspect-video relative rounded-2xl border-2 border-amber-400/50 shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-amber-500/30 overflow-hidden bg-black">
         {renderContent()}
+      </div>
+
+      {/* Instructions */}
+      <div className="w-full max-w-7xl mt-6 p-6 rounded-2xl border-2 border-amber-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-amber-500/40">
+        <h3 className="text-xl font-headline font-bold text-amber-400 mb-3">How to Play</h3>
+        <ul className="text-gray-300 space-y-2">
+          <li>✋ Use your index finger to draw the shape shown on the screen</li>
+          <li>✌️ Pinch your thumb and index finger together to use the eraser</li>
+          <li>📏 Widen or close your other hand's thumb and index finger to change the eraser size</li>
+          <li>🖐️ Show all 10 fingers to clear the canvas</li>
+          <li>🤖 Submit your drawing for the AI to score it!</li>
+        </ul>
       </div>
     </div>
   );
