@@ -1,95 +1,117 @@
 import type { Landmark, Handedness } from '@mediapipe/tasks-vision';
 
 /**
- * Finger-count detector — performance-critical path (runs every frame).
- *
- * Optimisations vs. the original implementation:
- *   1. Joint indices are pre-baked into a flat const array — no per-call
- *      allocation of `[[a,b,c], ...]`.
- *   2. The angle test (>160° / >150°) is converted into a cosine comparison
- *      so we never call `Math.atan2` (each call internally does ~2 atan2 +
- *      a normalisation, ~120 ns). One dot/cross check per joint is ~5 ns.
- *   3. Length checks are short-circuited (a hand is either 21 landmarks or
- *      nothing — we trust MediaPipe and skip undefined guards in the loop).
+ * Robust, scale-invariant 3D finger-count detector.
+ * Fixes false positives (e.g. 2 fingers detected as 3) caused by incorrect thumb landmark 
+ * indices and lack of 3D distance normalization.
  */
 
-// Landmark indices for the four "straight-or-curled" fingers.
-//   [mcp, pip, tip] triples — stored flat to avoid sub-array allocation.
-// prettier-ignore
-const FINGER_TRIPLES = new Int8Array([
-  5,  6,  8,   // index
-  9, 10, 12,   // middle
-  13, 14, 16,  // ring
-  17, 18, 20,  // pinky
-]);
-
-// Thumb uses CMC → MCP → IP (1 → 2 → 3).
-const THUMB_A = 1;
-const THUMB_B = 2;
-const THUMB_C = 3;
+function dist3D(a: Landmark, b: Landmark): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = (a.z || 0) - (b.z || 0);
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
 
 /**
- * Cosine threshold equivalents of the old degree thresholds.
- * angle > 160°  ↔  cos(angle) < cos(160°)  ≈  -0.9397
- * angle > 150°  ↔  cos(angle) < cos(150°)  ≈  -0.8660
- *
- * Because the angle at the middle joint is the inner angle between two
- * vectors (mcp→pip, pip→tip if you flip), we measure the angle between
- * (a−b) and (c−b). When the finger is straight those vectors point in
- * opposite directions ⇒ cosine ≈ −1.
+ * Checks if joint (a -> b -> c) forms a straight line (extended joint)
  */
-const COS_FINGER_THRESHOLD = -0.9397;
-const COS_THUMB_THRESHOLD  = -0.8660;
-
-function isStraight(
-  hand: Landmark[],
-  ai: number,
-  bi: number,
-  ci: number,
-  cosThreshold: number,
-): boolean {
-  const a = hand[ai];
-  const b = hand[bi];
-  const c = hand[ci];
+function isJointStraight(a: Landmark, b: Landmark, c: Landmark, cosThreshold = -0.85): boolean {
   const ux = a.x - b.x;
   const uy = a.y - b.y;
+  const uz = (a.z || 0) - (b.z || 0);
+
   const vx = c.x - b.x;
   const vy = c.y - b.y;
-  const dot = ux * vx + uy * vy;
-  // |u| · |v|  — sqrt is unavoidable for an accurate cosine, but each
-  // landmark has tiny magnitudes (normalised coords) so a single sqrt is
-  // still 1-2 orders of magnitude cheaper than the prior 2× atan2.
-  const denom = Math.sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy));
+  const vz = (c.z || 0) - (b.z || 0);
+
+  const dot = ux * vx + uy * vy + uz * vz;
+  const denom = Math.sqrt((ux * ux + uy * uy + uz * uz) * (vx * vx + vy * vy + vz * vz));
   if (denom === 0) return false;
   return dot / denom < cosThreshold;
 }
 
-export function countFingers(landmarks: Landmark[][], _handedness: Handedness[]): number {
+/**
+ * Main finger counting logic for MediaPipe 21 Hand Landmarks:
+ * 0: Wrist
+ * 1-4: Thumb (1: CMC, 2: MCP, 3: IP, 4: TIP)
+ * 5-8: Index (5: MCP, 6: PIP, 7: DIP, 8: TIP)
+ * 9-12: Middle (9: MCP, 10: PIP, 11: DIP, 12: TIP)
+ * 13-16: Ring (13: MCP, 14: PIP, 15: DIP, 16: TIP)
+ * 17-20: Pinky (17: MCP, 18: PIP, 19: DIP, 20: TIP)
+ */
+export function countFingers(landmarks: Landmark[][], _handedness?: Handedness[]): number {
   if (!landmarks || landmarks.length === 0) return 0;
 
-  let total = 0;
+  let totalCount = 0;
+
   for (let h = 0; h < landmarks.length; h++) {
     const hand = landmarks[h];
     if (!hand || hand.length < 21) continue;
 
-    let raised = 0;
-    // 4 fingers × 3 indices = 12 entries, stride 3.
-    for (let i = 0; i < 12; i += 3) {
-      if (
-        isStraight(
-          hand,
-          FINGER_TRIPLES[i],
-          FINGER_TRIPLES[i + 1],
-          FINGER_TRIPLES[i + 2],
-          COS_FINGER_THRESHOLD,
-        )
-      ) {
-        raised++;
+    const wrist = hand[0];
+    const indexMCP = hand[5];
+    const middleMCP = hand[9];
+
+    // Reference Palm Scale: Distance between Wrist (0) and Middle Finger MCP (9)
+    const palmScale = dist3D(wrist, middleMCP);
+    if (palmScale === 0) continue;
+
+    let handFingers = 0;
+
+    // 1. Check 4 Main Fingers (Index, Middle, Ring, Pinky)
+    const fingersData = [
+      { mcp: 5, pip: 6, dip: 7, tip: 8 },   // Index
+      { mcp: 9, pip: 10, dip: 11, tip: 12 }, // Middle
+      { mcp: 13, pip: 14, dip: 15, tip: 16 },// Ring
+      { mcp: 17, pip: 18, dip: 19, tip: 20 },// Pinky
+    ];
+
+    for (const f of fingersData) {
+      const mcpNode = hand[f.mcp];
+      const pipNode = hand[f.pip];
+      const tipNode = hand[f.tip];
+
+      const distTipToWrist = dist3D(wrist, tipNode);
+      const distPipToWrist = dist3D(wrist, pipNode);
+      const distTipToMCP = dist3D(mcpNode, tipNode);
+
+      // A finger is extended if:
+      // 1. Tip is further from wrist than PIP joint (distTipToWrist > 1.12 * distPipToWrist)
+      // 2. Tip to MCP distance is larger than half palm scale (> 0.5 * palmScale)
+      // 3. The PIP joint angle is relatively straight
+      const isTipExtended = distTipToWrist > 1.12 * distPipToWrist;
+      const isLengthExtended = distTipToMCP > 0.52 * palmScale;
+      const isAngleStraight = isJointStraight(mcpNode, pipNode, tipNode, -0.82);
+
+      if ((isTipExtended && isLengthExtended) || (isTipExtended && isAngleStraight)) {
+        handFingers++;
       }
     }
-    if (isStraight(hand, THUMB_A, THUMB_B, THUMB_C, COS_THUMB_THRESHOLD)) raised++;
 
-    total += raised;
+    // 2. Check Thumb (Landmarks 1: CMC, 2: MCP, 3: IP, 4: TIP)
+    const thumbMCP = hand[2];
+    const thumbIP = hand[3];
+    const thumbTip = hand[4];
+
+    const thumbDistToWrist = dist3D(wrist, thumbTip);
+    const thumbDistToIndexMCP = dist3D(indexMCP, thumbTip);
+    const thumbDistToMiddleMCP = dist3D(middleMCP, thumbTip);
+
+    // Thumb is extended away from palm if:
+    // - Distance from Thumb TIP (4) to Wrist (0) is at least 0.85x Palm Scale
+    // - AND Distance from Thumb TIP (4) to Index MCP (5) is at least 0.45x Palm Scale
+    // - AND Distance from Thumb TIP (4) to Middle MCP (9) is at least 0.55x Palm Scale
+    const isThumbOutward = thumbDistToIndexMCP > 0.45 * palmScale && thumbDistToMiddleMCP > 0.55 * palmScale;
+    const isThumbLength = thumbDistToWrist > 0.85 * palmScale;
+    const isThumbStraight = isJointStraight(thumbMCP, thumbIP, thumbTip, -0.80);
+
+    if (isThumbOutward && isThumbLength && isThumbStraight) {
+      handFingers++;
+    }
+
+    totalCount += handFingers;
   }
-  return total;
+
+  return totalCount;
 }

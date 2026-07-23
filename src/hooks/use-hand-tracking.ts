@@ -104,6 +104,7 @@ export function useHandTracking(): HandTrackingHook {
   const lastStateUpdateMs = useRef(0);   // wall clock of last setLandmarks
   const prevHandCountRef  = useRef(-1);  // for change-only setState
   const prevFingersRef    = useRef(-1);  // for change-only setState
+  const fingerHistoryRef  = useRef<number[]>([]); // 5-frame rolling buffer for temporal smoothing
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -148,7 +149,25 @@ export function useHandTracking(): HandTrackingHook {
     landmarksRef.current  = lm;
     handednessRef.current = hd;
 
-    const fingers = countFingers(lm, hd as any);
+    const rawFingers = countFingers(lm, hd as any);
+    
+    // Smooth over a 5-frame rolling window (majority vote) to eliminate frame jitter
+    fingerHistoryRef.current.push(rawFingers);
+    if (fingerHistoryRef.current.length > 5) {
+      fingerHistoryRef.current.shift();
+    }
+
+    const counts: Record<number, number> = {};
+    let fingers = rawFingers;
+    let maxFreq = 0;
+    for (const val of fingerHistoryRef.current) {
+      counts[val] = (counts[val] || 0) + 1;
+      if (counts[val] >= maxFreq) {
+        maxFreq = counts[val];
+        fingers = val;
+      }
+    }
+
     detectedFingersRef.current = fingers;
 
     // ── React-state update strategy ────────────────────────────────

@@ -1,10 +1,22 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Calculator, BrainCircuit, Waves, Pencil, Gamepad2, Hand, Music, Play } from 'lucide-react';
+import { Calculator, BrainCircuit, Waves, Pencil, Gamepad2, Hand, Music, Play, FileSpreadsheet } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
 const allGames = [
+  {
+    title: 'Motion Quiz Studio',
+    description: 'Upload custom questions via CSV/Excel or build your own quiz decks in-app! Show fingers to select options in hands-free motion trivia.',
+    href: '/games/motion-quiz-studio',
+    icon: FileSpreadsheet,
+    badge: 'Custom Deck Quiz',
+    badgeClass: 'bg-purple-100 text-purple-800',
+    iconClass: 'from-purple-400 to-indigo-600',
+    shadowClass: 'shadow-purple-500',
+    buttonClass: 'bg-purple-500 hover:bg-purple-600',
+    tilt: 'hover:-rotate-1',
+  },
   {
     title: 'Math Challenge',
     description: 'Solve dynamic math problems using your hands! Show the correct number of fingers to answer questions and test your arithmetic skills.',
@@ -101,7 +113,7 @@ export default function GamesPage() {
         <div className="mx-auto mb-12 max-w-2xl text-center">
           <span className="mb-4 inline-flex items-center gap-2 rounded-full border-2 border-foreground/85 bg-sky-200 px-5 py-2 text-sm font-bold text-foreground shadow-[3px_3px_0_0_rgba(20,35,40,0.85)]">
             <Hand className="h-4 w-4" />
-            7 games · hands only
+            8 games · hands only
           </span>
           <h1 className="font-headline text-4xl font-bold tracking-tight md:text-6xl">
             Choose Your{' '}
