@@ -34,7 +34,7 @@ const shapeIcons: Record<string, React.ReactNode> = {
 
 export default function SketchAndScoreClient() {
   const [drawingHand, setDrawingHand] = useState<HandChoice | null>(null);
-  const { videoRef, landmarks, handedness, startVideo, stopVideo, isLoading: isHandTrackingLoading, error: handTrackingError, detectedFingers } = useHandTracking();
+  const { videoRef, landmarks, landmarksRef, handedness, handednessRef, startVideo, stopVideo, isLoading: isHandTrackingLoading, error: handTrackingError, detectedFingers, detectedFingersRef } = useHandTracking();
   const drawingCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null); // Canvas for UI overlays
   const lastPosition = useRef<{ x: number, y: number } | null>(null);
@@ -53,6 +53,10 @@ export default function SketchAndScoreClient() {
   const [drawingTool, setDrawingTool] = useState<DrawingTool>('PENCIL');
   const [feedback, setFeedback] = useState<{isMatch: boolean, message: string} | null>(null);
   const [eraserSize, setEraserSize] = useState(25);
+  const eraserSizeRef = useRef(25);
+  useEffect(() => {
+    eraserSizeRef.current = eraserSize;
+  }, [eraserSize]);
   const [isBlurEnabled, setIsBlurEnabled] = useState(false);
 
   const getDrawingContext = useCallback(() => drawingCanvasRef.current?.getContext('2d'), []);
@@ -219,184 +223,207 @@ export default function SketchAndScoreClient() {
 
   // Main gesture detection logic
   useEffect(() => {
-    if (!landmarks.length || isHandTrackingLoading || !['GET_READY', 'COUNTDOWN', 'DRAWING'].includes(gameState)) {
+    if (isHandTrackingLoading || !['GET_READY', 'COUNTDOWN', 'DRAWING'].includes(gameState)) {
         return;
     }
 
-    const overlayCtx = getOverlayContext();
-    if(overlayCtx && overlayCanvasRef.current){
-      overlayCtx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
-    }
-    
-    // Prioritize the 10-finger clear gesture for desktop — edge-triggered so it
-    // fires only once per gesture hold, not every frame while fingers are up.
-    // A cooldown guards against hand-tracking jitter (10 → 9 → 10 across
-    // frames) re-arming the trigger mid-hold.
-    if (!isMobile && detectedFingers === 10) {
-        if (!tenFingersHeldRef.current) {
-            tenFingersHeldRef.current = true;
-            const now = performance.now();
-            if (now - lastTenFingerActionRef.current > 1500) {
-              lastTenFingerActionRef.current = now;
-              if (gameState === 'GET_READY') {
-                setCountdown(COUNTDOWN_SECONDS);
-                setGameState('COUNTDOWN');
-              } else if (gameState === 'DRAWING') {
-                clearCanvas();
-                toast({ title: "Canvas Cleared!" });
-              }
-            }
-        }
+    let animationFrameId: number;
+
+    const renderLoop = () => {
+      const currentLandmarks = landmarksRef.current;
+      const currentHandedness = handednessRef.current;
+      const currentDetectedFingers = detectedFingersRef.current;
+
+      if (!currentLandmarks.length) {
+        animationFrameId = requestAnimationFrame(renderLoop);
         return;
-    }
-    tenFingersHeldRef.current = false;
-
-
-    let drawingHandLandmarks: any[] | null = null;
-    let gestureHandLandmarks: any[] | null = null;
-    
-    if (drawingHand) {
-      const gestureHandChoice = drawingHand === 'Left' ? 'Right' : 'Left';
-      for(let i=0; i<handedness.length; i++) {
-        if (handedness[i][0].categoryName === drawingHand) {
-          drawingHandLandmarks = landmarks[i];
-        } else if (handedness[i][0].categoryName === gestureHandChoice) {
-          gestureHandLandmarks = landmarks[i];
-        }
       }
-    }
-    
-    if (gameState === 'DRAWING') {
-        if (drawingHandLandmarks) {
-            const pointing = isPointing(drawingHandLandmarks);
-            
-            let currentTool: DrawingTool | null = null;
-            let activeLandmark: any | null = null;
-            
-            // On desktop, pinching controls the eraser. On mobile, it's a button.
-            const pinching = !isMobile && isPinching(drawingHandLandmarks);
 
-            if (pinching) {
-                currentTool = 'ERASER';
-                activeLandmark = drawingHandLandmarks[8]; // Use index finger tip for erasing position
-            } else if (pointing) {
-                currentTool = 'PENCIL';
-                activeLandmark = drawingHandLandmarks[8];
-            }
-            
-            // Only update tool state if it's different and not on mobile (where it's manual)
-            if (currentTool && drawingTool !== currentTool && !isMobile) {
-                setDrawingTool(currentTool);
-            }
-
-            const activeTool = isMobile ? drawingTool : currentTool;
-
-            if (activeLandmark && activeTool) {
-                const drawingCtx = getDrawingContext();
-                const video = videoRef.current;
-                if (drawingCanvasRef.current && drawingCtx && video) {
-                    const { x: mirroredX, y } = landmarkToCanvas(activeLandmark.x, activeLandmark.y, video, true);
-
-                    // Apply smoothing (Exponential Moving Average) to reduce jitter
-                    const smoothingFactor = 0.4;
-                    let currentX = mirroredX;
-                    let currentY = y;
-
-                    if (lastPosition.current) {
-                        currentX = lastPosition.current.x + (mirroredX - lastPosition.current.x) * smoothingFactor;
-                        currentY = lastPosition.current.y + (y - lastPosition.current.y) * smoothingFactor;
-                    }
-
-                    if (activeTool === 'PENCIL') {
-                        drawingCtx.globalCompositeOperation = 'source-over';
-                        drawingCtx.strokeStyle = 'black';
-                        drawingCtx.lineWidth = 5;
-                    } else { // ERASER
-                        drawingCtx.globalCompositeOperation = 'destination-out';
-                        drawingCtx.lineWidth = eraserSize;
-                    }
-                    
-                    drawingCtx.lineCap = 'round';
-                    drawingCtx.lineJoin = 'round';
-                    
-                    if (lastPosition.current) {
-                        const midPoint = {
-                            x: (lastPosition.current.x + currentX) / 2,
-                            y: (lastPosition.current.y + currentY) / 2
-                        };
-                        drawingCtx.beginPath();
-                        drawingCtx.moveTo(midPointRef.current?.x ?? lastPosition.current.x, midPointRef.current?.y ?? lastPosition.current.y);
-                        drawingCtx.quadraticCurveTo(lastPosition.current.x, lastPosition.current.y, midPoint.x, midPoint.y);
-                        drawingCtx.stroke();
-                        midPointRef.current = midPoint;
-                    } else {
-                      drawingCtx.beginPath();
-                      drawingCtx.arc(currentX, currentY, drawingCtx.lineWidth / 2, 0, Math.PI * 2);
-                      drawingCtx.fill();
-                    }
-                    lastPosition.current = { x: currentX, y: currentY };
+      const overlayCtx = getOverlayContext();
+      if(overlayCtx && overlayCanvasRef.current){
+        overlayCtx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
+      }
+      
+      // Prioritize the 10-finger clear gesture for desktop — edge-triggered so it
+      // fires only once per gesture hold, not every frame while fingers are up.
+      // A cooldown guards against hand-tracking jitter (10 → 9 → 10 across
+      // frames) re-arming the trigger mid-hold.
+      if (!isMobile && currentDetectedFingers === 10) {
+          if (!tenFingersHeldRef.current) {
+              tenFingersHeldRef.current = true;
+              const now = performance.now();
+              if (now - lastTenFingerActionRef.current > 1500) {
+                lastTenFingerActionRef.current = now;
+                if (gameState === 'GET_READY') {
+                  setCountdown(COUNTDOWN_SECONDS);
+                  setGameState('COUNTDOWN');
+                } else if (gameState === 'DRAWING') {
+                  clearCanvas();
+                  toast({ title: "Canvas Cleared!" });
                 }
-            } else {
-                lastPosition.current = null;
-                midPointRef.current = null;
-            }
-        } else {
-          lastPosition.current = null;
-          midPointRef.current = null;
-        }
+              }
+          }
+          animationFrameId = requestAnimationFrame(renderLoop);
+          return;
+      }
+      tenFingersHeldRef.current = false;
 
-        // On desktop, second hand controls eraser size
-        if (!isMobile && gestureHandLandmarks && drawingTool === 'ERASER') {
-          const thumbTip = gestureHandLandmarks[4];
-          const indexTip = gestureHandLandmarks[8];
-          const distance = Math.sqrt(
-            Math.pow(thumbTip.x - indexTip.x, 2) +
-            Math.pow(thumbTip.y - indexTip.y, 2)
-          );
 
-          const newSize = MIN_ERASER_SIZE + (distance / 0.3) * (MAX_ERASER_SIZE - MIN_ERASER_SIZE);
-          setEraserSize(Math.max(MIN_ERASER_SIZE, Math.min(MAX_ERASER_SIZE, newSize)));
-
-          // Draw eraser size indicator on the overlay canvas
-          if (overlayCtx && overlayCanvasRef.current) {
-            const video = videoRef.current;
-            if (video) {
-              // Calculate midpoint between thumb and index finger
-              const { x: midX, y: midY } = landmarkToCanvas(
-                (thumbTip.x + indexTip.x) / 2,
-                (thumbTip.y + indexTip.y) / 2,
-                video,
-                true
-              );
-
-            overlayCtx.save();
-            overlayCtx.globalAlpha = 0.5;
-            overlayCtx.fillStyle = 'white';
-            overlayCtx.strokeStyle = 'black';
-            overlayCtx.lineWidth = 2;
-
-            // Draw circle indicator
-            overlayCtx.beginPath();
-            overlayCtx.arc(midX, midY, eraserSize / 2, 0, Math.PI * 2);
-            overlayCtx.fill();
-            overlayCtx.stroke();
-
-            // Draw size text
-            overlayCtx.globalAlpha = 1.0;
-            overlayCtx.fillStyle = 'black';
-            overlayCtx.font = 'bold 16px sans-serif';
-            overlayCtx.textAlign = 'center';
-            overlayCtx.textBaseline = 'middle';
-            overlayCtx.fillText(Math.round(eraserSize).toString(), midX, midY);
-            overlayCtx.restore();
-            }
+      let drawingHandLandmarks: any[] | null = null;
+      let gestureHandLandmarks: any[] | null = null;
+      
+      if (drawingHand) {
+        const gestureHandChoice = drawingHand === 'Left' ? 'Right' : 'Left';
+        for(let i=0; i<currentHandedness.length; i++) {
+          if (currentHandedness[i][0].categoryName === drawingHand) {
+            drawingHandLandmarks = currentLandmarks[i];
+          } else if (currentHandedness[i][0].categoryName === gestureHandChoice) {
+            gestureHandLandmarks = currentLandmarks[i];
           }
         }
-    } else {
-        lastPosition.current = null;
-        midPointRef.current = null;
-    }
-  }, [landmarks, handedness, gameState, drawingTool, eraserSize, clearCanvas, toast, getDrawingContext, getOverlayContext, isHandTrackingLoading, drawingHand, detectedFingers, isMobile]);
+      }
+      
+      if (gameState === 'DRAWING') {
+          if (drawingHandLandmarks) {
+              const pointing = isPointing(drawingHandLandmarks);
+              
+              let currentTool: DrawingTool | null = null;
+              let activeLandmark: any | null = null;
+              
+              // On desktop, pinching controls the eraser. On mobile, it's a button.
+              const pinching = !isMobile && isPinching(drawingHandLandmarks);
+
+              if (pinching) {
+                  currentTool = 'ERASER';
+                  activeLandmark = drawingHandLandmarks[8]; // Use index finger tip for erasing position
+              } else if (pointing) {
+                  currentTool = 'PENCIL';
+                  activeLandmark = drawingHandLandmarks[8];
+              }
+              
+              // Only update tool state if it's different and not on mobile (where it's manual)
+              if (currentTool && drawingTool !== currentTool && !isMobile) {
+                  setDrawingTool(currentTool);
+              }
+
+              const activeTool = isMobile ? drawingTool : currentTool;
+
+              if (activeLandmark && activeTool) {
+                  const drawingCtx = getDrawingContext();
+                  const video = videoRef.current;
+                  if (drawingCanvasRef.current && drawingCtx && video) {
+                      const { x: mirroredX, y } = landmarkToCanvas(activeLandmark.x, activeLandmark.y, video, true);
+
+                      // Apply smoothing (Exponential Moving Average) to reduce jitter
+                      const smoothingFactor = 0.4;
+                      let currentX = mirroredX;
+                      let currentY = y;
+
+                      if (lastPosition.current) {
+                          currentX = lastPosition.current.x + (mirroredX - lastPosition.current.x) * smoothingFactor;
+                          currentY = lastPosition.current.y + (y - lastPosition.current.y) * smoothingFactor;
+                      }
+
+                      if (activeTool === 'PENCIL') {
+                          drawingCtx.globalCompositeOperation = 'source-over';
+                          drawingCtx.strokeStyle = 'black';
+                          drawingCtx.lineWidth = 5;
+                      } else { // ERASER
+                          drawingCtx.globalCompositeOperation = 'destination-out';
+                          drawingCtx.lineWidth = eraserSizeRef.current;
+                      }
+                      
+                      drawingCtx.lineCap = 'round';
+                      drawingCtx.lineJoin = 'round';
+                      
+                      if (lastPosition.current) {
+                          const midPoint = {
+                              x: (lastPosition.current.x + currentX) / 2,
+                              y: (lastPosition.current.y + currentY) / 2
+                          };
+                          drawingCtx.beginPath();
+                          drawingCtx.moveTo(midPointRef.current?.x ?? lastPosition.current.x, midPointRef.current?.y ?? lastPosition.current.y);
+                          drawingCtx.quadraticCurveTo(lastPosition.current.x, lastPosition.current.y, midPoint.x, midPoint.y);
+                          drawingCtx.stroke();
+                          midPointRef.current = midPoint;
+                      } else {
+                        drawingCtx.beginPath();
+                        drawingCtx.arc(currentX, currentY, drawingCtx.lineWidth / 2, 0, Math.PI * 2);
+                        drawingCtx.fill();
+                      }
+                      lastPosition.current = { x: currentX, y: currentY };
+                  }
+              } else {
+                  lastPosition.current = null;
+                  midPointRef.current = null;
+              }
+          } else {
+            lastPosition.current = null;
+            midPointRef.current = null;
+          }
+
+          // On desktop, second hand controls eraser size
+          if (!isMobile && gestureHandLandmarks && drawingTool === 'ERASER') {
+            const thumbTip = gestureHandLandmarks[4];
+            const indexTip = gestureHandLandmarks[8];
+            const distance = Math.sqrt(
+              Math.pow(thumbTip.x - indexTip.x, 2) +
+              Math.pow(thumbTip.y - indexTip.y, 2)
+            );
+
+            const newSize = MIN_ERASER_SIZE + (distance / 0.3) * (MAX_ERASER_SIZE - MIN_ERASER_SIZE);
+            const clampedSize = Math.max(MIN_ERASER_SIZE, Math.min(MAX_ERASER_SIZE, newSize));
+            eraserSizeRef.current = clampedSize;
+
+            // Draw eraser size indicator on the overlay canvas
+            if (overlayCtx && overlayCanvasRef.current) {
+              const video = videoRef.current;
+              if (video) {
+                // Calculate midpoint between thumb and index finger
+                const { x: midX, y: midY } = landmarkToCanvas(
+                  (thumbTip.x + indexTip.x) / 2,
+                  (thumbTip.y + indexTip.y) / 2,
+                  video,
+                  true
+                );
+
+              overlayCtx.save();
+              overlayCtx.globalAlpha = 0.5;
+              overlayCtx.fillStyle = 'white';
+              overlayCtx.strokeStyle = 'black';
+              overlayCtx.lineWidth = 2;
+
+              // Draw circle indicator
+              overlayCtx.beginPath();
+              overlayCtx.arc(midX, midY, clampedSize / 2, 0, Math.PI * 2);
+              overlayCtx.fill();
+              overlayCtx.stroke();
+
+              // Draw size text
+              overlayCtx.globalAlpha = 1.0;
+              overlayCtx.fillStyle = 'black';
+              overlayCtx.font = 'bold 16px sans-serif';
+              overlayCtx.textAlign = 'center';
+              overlayCtx.textBaseline = 'middle';
+              overlayCtx.fillText(Math.round(clampedSize).toString(), midX, midY);
+              overlayCtx.restore();
+              }
+            }
+          }
+      } else {
+          lastPosition.current = null;
+          midPointRef.current = null;
+      }
+      
+      animationFrameId = requestAnimationFrame(renderLoop);
+    };
+
+    animationFrameId = requestAnimationFrame(renderLoop);
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [gameState, drawingTool, clearCanvas, toast, getDrawingContext, getOverlayContext, isHandTrackingLoading, drawingHand, isMobile, landmarksRef, handednessRef, detectedFingersRef]);
 
 
   // Keep canvas sizes in sync with video

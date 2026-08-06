@@ -25,7 +25,7 @@ const BASE_TIMER_SECONDS = 20;
 const EXTRA_TIME_PER_DIFFICULTY = 2;
 
 export default function MathChallenge2Client() {
-  const { videoRef, landmarks, startVideo, stopVideo, isLoading: isHandTrackingLoading, error: handTrackingError } = useHandTracking();
+  const { videoRef, landmarks, landmarksRef, startVideo, stopVideo, isLoading: isHandTrackingLoading, error: handTrackingError } = useHandTracking();
   const { toast, dismiss } = useToast();
   const toastIdRef = useRef<string | null>(null);
   const isMobile = useIsMobile();
@@ -151,49 +151,74 @@ export default function MathChallenge2Client() {
 
   // Pointer and Bubble popping logic
   useEffect(() => {
-    if (gameState !== 'PLAYING' || !landmarks.length || !videoContainerRef.current) return;
+    if (gameState !== 'PLAYING' || !videoContainerRef.current) return;
     
-    const videoContainer = videoContainerRef.current;
-    const pointer = pointerRef.current;
-    const video = videoRef.current;
-    
-    // Index finger tip is landmark 8
-    const indexTip = landmarks[0][8]; 
-    if (!indexTip || !pointer || !video) return;
+    let animationFrameId: number;
 
-    const videoRect = videoContainer.getBoundingClientRect();
-    const { x: tipX, y: tipY } = landmarkToCanvas(indexTip.x, indexTip.y, video);
+    const renderLoop = () => {
+      const videoContainer = videoContainerRef.current;
+      const pointer = pointerRef.current;
+      const video = videoRef.current;
+      const currentLandmarks = landmarksRef.current;
+      
+      if (!videoContainer || !pointer || !video || !currentLandmarks || !currentLandmarks.length) {
+        animationFrameId = requestAnimationFrame(renderLoop);
+        return;
+      }
+      
+      // Index finger tip is landmark 8
+      const indexTip = currentLandmarks[0][8]; 
+      if (!indexTip) {
+        animationFrameId = requestAnimationFrame(renderLoop);
+        return;
+      }
 
-    // Update pointer position imperatively for smoothness
-    pointer.style.transform = `translate(${tipX}px, ${tipY}px)`;
-    
-    bubbleRefs.current.forEach((bubbleDiv, index) => {
-        if (!bubbleDiv || bubbles[index].popped) return;
-        
-        const bubbleRect = bubbleDiv.getBoundingClientRect();
-        // Convert to be relative to the video container, not the viewport
-        const bubbleX = (bubbleRect.left - videoRect.left) + bubbleRect.width / 2;
-        const bubbleY = (bubbleRect.top - videoRect.top) + bubbleRect.height / 2;
-        const bubbleRadius = bubbleRect.width / 2;
-        
-        const distance = Math.sqrt(Math.pow(tipX - bubbleX, 2) + Math.pow(tipY - bubbleY, 2));
-        
-        if (distance < bubbleRadius) {
-            playPopSound();
+      const videoRect = videoContainer.getBoundingClientRect();
+      const { x: tipX, y: tipY } = landmarkToCanvas(indexTip.x, indexTip.y, video);
 
-            setBubbles(prevBubbles => {
-                const newBubbles = [...prevBubbles];
-                if (newBubbles[index] && !newBubbles[index].popped) {
-                    newBubbles[index].popped = true;
-                    const isCorrect = newBubbles[index].value === currentProblem?.correctAnswer;
-                    handleAnswer(isCorrect ? 'correct' : 'incorrect', newBubbles[index].value);
-                }
-                return newBubbles;
-            });
-        }
-    });
+      // Update pointer position imperatively for smoothness
+      pointer.style.transform = `translate(${tipX}px, ${tipY}px)`;
+      
+      let poppedAny = false;
 
-  }, [landmarks, gameState, bubbles, currentProblem, handleAnswer, playPopSound]);
+      bubbleRefs.current.forEach((bubbleDiv, index) => {
+          if (!bubbleDiv || bubbles[index].popped || poppedAny) return;
+          
+          const bubbleRect = bubbleDiv.getBoundingClientRect();
+          // Convert to be relative to the video container, not the viewport
+          const bubbleX = (bubbleRect.left - videoRect.left) + bubbleRect.width / 2;
+          const bubbleY = (bubbleRect.top - videoRect.top) + bubbleRect.height / 2;
+          const bubbleRadius = bubbleRect.width / 2;
+          
+          const distance = Math.sqrt(Math.pow(tipX - bubbleX, 2) + Math.pow(tipY - bubbleY, 2));
+          
+          if (distance < bubbleRadius) {
+              poppedAny = true;
+              playPopSound();
+
+              setBubbles(prevBubbles => {
+                  const newBubbles = [...prevBubbles];
+                  if (newBubbles[index] && !newBubbles[index].popped) {
+                      newBubbles[index].popped = true;
+                      const isCorrect = newBubbles[index].value === currentProblem?.correctAnswer;
+                      handleAnswer(isCorrect ? 'correct' : 'incorrect', newBubbles[index].value);
+                  }
+                  return newBubbles;
+              });
+          }
+      });
+
+      if (!poppedAny) {
+        animationFrameId = requestAnimationFrame(renderLoop);
+      }
+    };
+
+    animationFrameId = requestAnimationFrame(renderLoop);
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [gameState, bubbles, currentProblem, handleAnswer, playPopSound, landmarksRef]);
 
 
   const renderGameState = () => {
