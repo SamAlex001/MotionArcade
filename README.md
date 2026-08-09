@@ -2,7 +2,7 @@
 
 An innovative, touchless AR arcade gaming platform where your **hands are the controller**. MotionArcade combines cutting-edge computer vision, high-performance gesture tracking, synthesized Web Audio, and AI-driven content generation to deliver immersive web-based gaming experiences with zero extra hardware.
 
-![Next.js](https://img.shields.io/badge/Next.js-15.3.3-black?logo=nextdotjs)
+![Next.js](https://img.shields.io/badge/Next.js-16.1.6-black?logo=nextdotjs)
 ![React](https://img.shields.io/badge/React-18.3.1-blue?logo=react)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?logo=typescript)
 ![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10.14-00979D?logo=google)
@@ -84,7 +84,7 @@ MotionArcade is engineered specifically to prevent common React performance bott
 
 ## 🛠️ Tech Stack
 
-- **Core Framework**: [Next.js 15.3](https://nextjs.org/) (App Router, Turbopack) & [React 18](https://react.dev/)
+- **Core Framework**: [Next.js 16](https://nextjs.org/) (App Router, Turbopack) & [React 18](https://react.dev/)
 - **Language**: TypeScript 5
 - **Vision Engine**: [@mediapipe/tasks-vision](https://www.npmjs.com/package/@mediapipe/tasks-vision)
 - **AI Integration**: [Google Genkit](https://firebase.google.com/docs/genkit) & Google Generative AI (Gemini 2.5 Flash)
@@ -120,6 +120,7 @@ MotionArcade is engineered specifically to prevent common React performance bott
    ```env
    GOOGLE_GENAI_API_KEY=your_gemini_api_key_here
    ```
+   > The Google GenAI plugin also accepts `GEMINI_API_KEY` if you prefer that name; set one of the two.
 
 4. **Start the Development Server**
    ```bash
@@ -141,6 +142,7 @@ MotionArcade_test/
 │   ├── app/                       # Next.js App Router routes
 │   │   ├── games/                 # Arcade games pages & client implementations
 │   │   │   ├── air-piano/
+│   │   │   ├── just-show-your-hands/
 │   │   │   ├── math-challenge/
 │   │   │   ├── math-challenge-2/
 │   │   │   ├── motion-quiz-studio/ # Custom spreadsheet trivia studio
@@ -152,7 +154,7 @@ MotionArcade_test/
 │   ├── components/                # Reusable UI primitives (shadcn/ui & custom)
 │   ├── hooks/
 │   │   ├── use-hand-tracking.ts   # Core MediaPipe hand tracking hook (60 FPS engine)
-│   │   └── use-mobile.ts
+│   │   └── use-mobile.tsx
 │   ├── lib/
 │   │   ├── finger-counting.ts     # 3D scale-invariant finger counting logic
 │   │   ├── quiz-parser.ts        # CSV/XLSX spreadsheet parser

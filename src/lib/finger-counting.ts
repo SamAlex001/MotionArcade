@@ -1,4 +1,4 @@
-import type { Landmark, Handedness } from '@mediapipe/tasks-vision';
+import type { Landmark, Category } from '@mediapipe/tasks-vision';
 
 /**
  * Robust, scale-invariant 3D finger-count detector.
@@ -40,7 +40,7 @@ function isJointStraight(a: Landmark, b: Landmark, c: Landmark, cosThreshold = -
  * 13-16: Ring (13: MCP, 14: PIP, 15: DIP, 16: TIP)
  * 17-20: Pinky (17: MCP, 18: PIP, 19: DIP, 20: TIP)
  */
-export function countFingers(landmarks: Landmark[][], _handedness?: Handedness[]): number {
+export function countFingers(landmarks: Landmark[][], _handedness?: Category[]): number {
   if (!landmarks || landmarks.length === 0) return 0;
 
   let totalCount = 0;

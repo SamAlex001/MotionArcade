@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
-import type { Landmark, Handedness } from '@mediapipe/tasks-vision';
+import type { Landmark, Category } from '@mediapipe/tasks-vision';
 
 import { countFingers } from '@/lib/finger-counting';
 import { perf } from '@/lib/perf-monitor';
@@ -41,13 +41,13 @@ type HandTrackingHook = {
   /** Throttled (≤5 Hz) React-state version of the latest finger count. */
   detectedFingers: number;
   /** Updates only when hand count changes — game loops should use the ref. */
-  handedness: Handedness[][];
+  handedness: Category[][];
   /** Updates only when hand count changes — game loops should use the ref. */
   landmarks: Landmark[][];
 
   /** Always-fresh refs. Read these from inside `requestAnimationFrame`. */
   landmarksRef:        React.MutableRefObject<Landmark[][]>;
-  handednessRef:       React.MutableRefObject<Handedness[][]>;
+  handednessRef:       React.MutableRefObject<Category[][]>;
   detectedFingersRef:  React.MutableRefObject<number>;
 
   startVideo: () => Promise<void>;
@@ -94,7 +94,7 @@ export function useHandTracking(): HandTrackingHook {
 
   // Hot-path refs — updated every frame, never trigger re-render.
   const landmarksRef       = useRef<Landmark[][]>([]);
-  const handednessRef      = useRef<Handedness[][]>([]);
+  const handednessRef      = useRef<Category[][]>([]);
   const detectedFingersRef = useRef<number>(0);
 
   // Internal frame-throttling state
@@ -109,7 +109,7 @@ export function useHandTracking(): HandTrackingHook {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [detectedFingers, setDetectedFingers] = useState(0);
-  const [handedness, setHandedness] = useState<Handedness[][]>([]);
+  const [handedness, setHandedness] = useState<Category[][]>([]);
   const [landmarks, setLandmarks] = useState<Landmark[][]>([]);
 
   const predictWebcam = useCallback(() => {
@@ -313,7 +313,13 @@ export function useHandTracking(): HandTrackingHook {
 
         const numHands       = isMobileRef.current ? 1 : 2;
         const detectionConf  = isMobileRef.current ? 0.4 : 0.5;
-        const trackingConf   = isMobileRef.current ? 0.4 : 0.5;
+        // Mobile: use a tracking confidence *higher* than the detection confidence
+        // (0.6 > 0.4). When tracking dips to ~0.4 the model cleanly drops the track
+        // instead of holding a stale one, and the low detection confidence then
+        // re-acquires the hand quickly. This eliminates the "tracks stalls for a
+        // few seconds, then I wait a lot before it picks up again" symptom that
+        // appeared after switching to the real `minTrackingConfidence` option.
+        const trackingConf   = isMobileRef.current ? 0.6 : 0.5;
 
         const configKey = `${numHands}|${detectionConf}|${trackingConf}`;
 
@@ -327,7 +333,9 @@ export function useHandTracking(): HandTrackingHook {
               baseOptions: { modelAssetPath: MODEL_PATH, delegate: 'GPU' },
               runningMode: 'VIDEO',
               numHands, minHandDetectionConfidence: detectionConf,
-              minHandTrackingConfidence: trackingConf,
+              // NOTE: `minHandTrackingConfidence` is not a real option in
+              // tasks-vision@0.10.14 — the correct key is `minTrackingConfidence`.
+              minTrackingConfidence: trackingConf,
             });
           } catch (gpuErr) {
             console.warn('GPU delegate failed, falling back to CPU:', gpuErr);
@@ -335,7 +343,7 @@ export function useHandTracking(): HandTrackingHook {
               baseOptions: { modelAssetPath: MODEL_PATH, delegate: 'CPU' },
               runningMode: 'VIDEO',
               numHands, minHandDetectionConfidence: detectionConf,
-              minHandTrackingConfidence: trackingConf,
+              minTrackingConfidence: trackingConf,
             });
           }
           if (cancelled) {

@@ -5,9 +5,8 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  // NOTE: In Next.js 16 the top-level `eslint` config key was removed from
+  // NextConfig — linting is now a standalone `next lint` step (see package.json).
 
   // Gzip/Brotli compression at the Next.js layer. Most hosts (Vercel, Firebase
   // App Hosting) gzip for us, but enabling this keeps `next start` fast too.

@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Calculator, BrainCircuit, Waves, Pencil, Gamepad2, Hand, Music, Play, FileSpreadsheet } from 'lucide-react';
+import { Calculator, BrainCircuit, Waves, Pencil, Gamepad2, Hand, Music, Play, FileSpreadsheet, PersonStanding } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
@@ -78,6 +78,18 @@ const allGames = [
     tilt: 'hover:-rotate-1',
   },
   {
+    title: 'Just Show Your Body',
+    description: 'A full-body pose-tracking demo. Step back and see all 33 joints tracked live as a Classic skeleton, Neon glow, or holographic 3D Aura.',
+    href: '/games/just-show-your-body',
+    icon: PersonStanding,
+    badge: 'Tech Demo',
+    badgeClass: 'bg-emerald-100 text-emerald-800',
+    iconClass: 'from-emerald-400 to-emerald-600',
+    shadowClass: 'shadow-emerald-500',
+    buttonClass: 'bg-emerald-500 hover:bg-emerald-600',
+    tilt: 'hover:rotate-1',
+  },
+  {
     title: 'Ping Pong',
     description: 'A classic game of single-player ping pong. Control the paddle with your hand and try to keep the ball in play.',
     href: '/games/ping-pong',
@@ -113,7 +125,7 @@ export default function GamesPage() {
         <div className="mx-auto mb-12 max-w-2xl text-center">
           <span className="mb-4 inline-flex items-center gap-2 rounded-full border-2 border-foreground/85 bg-sky-200 px-5 py-2 text-sm font-bold text-foreground shadow-[3px_3px_0_0_rgba(20,35,40,0.85)]">
             <Hand className="h-4 w-4" />
-            8 games · hands only
+            9 games · hands & body
           </span>
           <h1 className="font-headline text-4xl font-bold tracking-tight md:text-6xl">
             Choose Your{' '}

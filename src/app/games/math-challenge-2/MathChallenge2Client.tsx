@@ -271,7 +271,7 @@ export default function MathChallenge2Client() {
               {bubbles.map((bubble, index) => (
                 <div
                   key={index}
-                  ref={el => bubbleRefs.current[index] = el}
+                  ref={(el) => { bubbleRefs.current[index] = el; }}
                   className={`flex items-center justify-center font-bold text-white transition-all duration-300 animate-float-gooey bubble-shiny ${bubble.popped ? 'animate-pop' : ''} ${bubbleSize}`}
                   style={{ animationDelay: `${index * 150}ms` }}
                 >
