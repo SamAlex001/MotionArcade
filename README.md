@@ -7,7 +7,7 @@ An innovative, touchless AR arcade gaming platform where your **hands are the co
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?logo=typescript)
 ![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10.14-00979D?logo=google)
 ![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-3.4-38B2AC?logo=tailwindcss)
-![License](https://img.shields.io/badge/License-Academic-purple)
+![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)
 
 ---
 
@@ -169,7 +169,14 @@ MotionArcade_test/
 
 ## 📄 License
 
-Academic / Final Year MCA Project. All rights reserved.
+**Academic / Final Year MCA Project.**
+
+This project is free and open-source software licensed under the **[GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE)**.
+You are free to use, study, modify, and redistribute it under the terms of that license.
+
+> ⚠️ The AGPL is a strong copyleft license designed for network software like this app. If you run a modified version on a server that others interact with, you must make your full source (including your changes) available to those users under the AGPL.
+>
+> Full license text: see [`LICENSE`](./LICENSE) or <https://www.gnu.org/licenses/agpl-3.0.html>.
 
 ---
 
