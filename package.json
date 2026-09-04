@@ -10,7 +10,8 @@
     "build": "NODE_ENV=production next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:api": "node scripts/test-api.mjs"
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.29.0",
