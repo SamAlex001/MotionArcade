@@ -1,3 +1,22 @@
+/**
+ * MotionArcade — touchless AR arcade gaming platform
+ * Copyright (C) 2025-2026 Kartik Hawelikar, Sam Alex, Shubham Bolave, and contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+
 'use server';
 /**
  * @fileOverview AI flows for the Sketch & Score game.
@@ -10,32 +29,43 @@ import { z } from 'zod';
 
 // === Flow for Generating a Shape ===
 
+const GenerateShapeInputSchema = z.object({
+  pastShapes: z.array(z.string()).describe('An array of shapes that have already been shown to the user in this session.'),
+});
+export type GenerateShapeInput = z.infer<typeof GenerateShapeInputSchema>;
+
 const GenerateShapeOutputSchema = z.object({
   shape: z.string().describe('The name of a simple, common shape to draw (e.g., "circle", "square", "triangle", "star", "heart").'),
 });
 export type GenerateShapeOutput = z.infer<typeof GenerateShapeOutputSchema>;
 
-export async function generateShapeToDraw(): Promise<GenerateShapeOutput> {
-  return generateShapeFlow();
+export async function generateShapeToDraw(input: GenerateShapeInput): Promise<GenerateShapeOutput> {
+  return generateShapeFlow(input);
 }
 
 const generateShapePrompt = ai.definePrompt({
   name: 'generateShapePrompt',
+  input: { schema: GenerateShapeInputSchema },
   output: { schema: GenerateShapeOutputSchema },
   prompt: `Generate a single, common, simple shape name that a person can easily draw with their finger in the air.
 
-  Examples: "circle", "square", "triangle", "star", "heart", "arrow", "house".
+  The available shapes are: "circle", "square", "triangle", "star", "heart", "arrow", "house".
+
+  You have already shown the user the following shapes in this session: {{{pastShapes}}}.
   
-  Return only the name of the shape.`,
+  Please generate a shape from the list of available shapes that is NOT in the list of past shapes.
+  
+  Return only the name of the new shape.`,
 });
 
 const generateShapeFlow = ai.defineFlow(
   {
     name: 'generateShapeFlow',
+    inputSchema: GenerateShapeInputSchema,
     outputSchema: GenerateShapeOutputSchema,
   },
-  async () => {
-    const { output } = await generateShapePrompt();
+  async (input) => {
+    const { output } = await generateShapePrompt(input);
     return output!;
   }
 );

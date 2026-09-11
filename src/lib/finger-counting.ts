@@ -1,72 +1,135 @@
-import type { Landmark, Handedness } from '@mediapipe/tasks-vision';
+/**
+ * MotionArcade — touchless AR arcade gaming platform
+ * Copyright (C) 2025-2026 Kartik Hawelikar, Sam Alex, Shubham Bolave, and contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 
-// Landmark indices
-const WRIST = 0;
-const THUMB_CMC = 1;
-const THUMB_MCP = 2;
-const THUMB_IP = 3;
-const THUMB_TIP = 4;
-const INDEX_FINGER_MCP = 5;
-const INDEX_FINGER_PIP = 6;
-const INDEX_FINGER_DIP = 7;
-const INDEX_FINGER_TIP = 8;
-const MIDDLE_FINGER_MCP = 9;
-const MIDDLE_FINGER_PIP = 10;
-const MIDDLE_FINGER_DIP = 11;
-const MIDDLE_FINGER_TIP = 12;
-const RING_FINGER_MCP = 13;
-const RING_FINGER_PIP = 14;
-const RING_FINGER_DIP = 15;
-const RING_FINGER_TIP = 16;
-const PINKY_MCP = 17;
-const PINKY_PIP = 18;
-const PINKY_DIP = 19;
-const PINKY_TIP = 20;
+import type { Landmark, Category } from '@mediapipe/tasks-vision';
 
-// Function to calculate the angle between three points
-function getAngle(a: Landmark, b: Landmark, c: Landmark): number {
-  const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
-  let angle = Math.abs(radians * 180.0 / Math.PI);
-  if (angle > 180.0) {
-    angle = 360 - angle;
-  }
-  return angle;
+/**
+ * Robust, scale-invariant 3D finger-count detector.
+ * Fixes false positives (e.g. 2 fingers detected as 3) caused by incorrect thumb landmark 
+ * indices and lack of 3D distance normalization.
+ */
+
+function dist3D(a: Landmark, b: Landmark): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = (a.z || 0) - (b.z || 0);
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-export function countFingers(landmarks: Landmark[][], handedness: Handedness[]): number {
-  if (!landmarks || landmarks.length === 0) {
-    return 0;
-  }
+/**
+ * Checks if joint (a -> b -> c) forms a straight line (extended joint)
+ */
+function isJointStraight(a: Landmark, b: Landmark, c: Landmark, cosThreshold = -0.85): boolean {
+  const ux = a.x - b.x;
+  const uy = a.y - b.y;
+  const uz = (a.z || 0) - (b.z || 0);
 
-  let totalFingers = 0;
+  const vx = c.x - b.x;
+  const vy = c.y - b.y;
+  const vz = (c.z || 0) - (b.z || 0);
 
-  for (let i = 0; i < landmarks.length; i++) {
-    const handLandmarks = landmarks[i];
-    let raisedFingers = 0;
+  const dot = ux * vx + uy * vy + uz * vz;
+  const denom = Math.sqrt((ux * ux + uy * uy + uz * uz) * (vx * vx + vy * vy + vz * vz));
+  if (denom === 0) return false;
+  return dot / denom < cosThreshold;
+}
 
-    // Define the angles for each finger when it's extended
-    const fingerCurls = {
-        thumb: getAngle(handLandmarks[THUMB_CMC], handLandmarks[THUMB_MCP], handLandmarks[THUMB_TIP]),
-        index: getAngle(handLandmarks[INDEX_FINGER_MCP], handLandmarks[INDEX_FINGER_PIP], handLandmarks[INDEX_FINGER_TIP]),
-        middle: getAngle(handLandmarks[MIDDLE_FINGER_MCP], handLandmarks[MIDDLE_FINGER_PIP], handLandmarks[MIDDLE_FINGER_TIP]),
-        ring: getAngle(handLandmarks[RING_FINGER_MCP], handLandmarks[RING_FINGER_PIP], handLandmarks[RING_FINGER_TIP]),
-        pinky: getAngle(handLandmarks[PINKY_MCP], handLandmarks[PINKY_PIP], handLandmarks[PINKY_TIP]),
-    };
+/**
+ * Main finger counting logic for MediaPipe 21 Hand Landmarks:
+ * 0: Wrist
+ * 1-4: Thumb (1: CMC, 2: MCP, 3: IP, 4: TIP)
+ * 5-8: Index (5: MCP, 6: PIP, 7: DIP, 8: TIP)
+ * 9-12: Middle (9: MCP, 10: PIP, 11: DIP, 12: TIP)
+ * 13-16: Ring (13: MCP, 14: PIP, 15: DIP, 16: TIP)
+ * 17-20: Pinky (17: MCP, 18: PIP, 19: DIP, 20: TIP)
+ */
+export function countFingers(landmarks: Landmark[][], _handedness?: Category[]): number {
+  if (!landmarks || landmarks.length === 0) return 0;
 
-    // Check if fingers are straight (angle is high)
-    if (fingerCurls.index > 160) raisedFingers++;
-    if (fingerCurls.middle > 160) raisedFingers++;
-    if (fingerCurls.ring > 160) raisedFingers++;
-    if (fingerCurls.pinky > 160) raisedFingers++;
+  let totalCount = 0;
 
-    // Thumb logic: Check for a wide angle indicating it's open.
-    // This is more reliable across different hand rotations.
-    if (fingerCurls.thumb > 150) {
-        raisedFingers++;
+  for (let h = 0; h < landmarks.length; h++) {
+    const hand = landmarks[h];
+    if (!hand || hand.length < 21) continue;
+
+    const wrist = hand[0];
+    const indexMCP = hand[5];
+    const middleMCP = hand[9];
+
+    // Reference Palm Scale: Distance between Wrist (0) and Middle Finger MCP (9)
+    const palmScale = dist3D(wrist, middleMCP);
+    if (palmScale === 0) continue;
+
+    let handFingers = 0;
+
+    // 1. Check 4 Main Fingers (Index, Middle, Ring, Pinky)
+    const fingersData = [
+      { mcp: 5, pip: 6, dip: 7, tip: 8 },   // Index
+      { mcp: 9, pip: 10, dip: 11, tip: 12 }, // Middle
+      { mcp: 13, pip: 14, dip: 15, tip: 16 },// Ring
+      { mcp: 17, pip: 18, dip: 19, tip: 20 },// Pinky
+    ];
+
+    for (const f of fingersData) {
+      const mcpNode = hand[f.mcp];
+      const pipNode = hand[f.pip];
+      const tipNode = hand[f.tip];
+
+      const distTipToWrist = dist3D(wrist, tipNode);
+      const distPipToWrist = dist3D(wrist, pipNode);
+      const distTipToMCP = dist3D(mcpNode, tipNode);
+
+      // A finger is extended if:
+      // 1. Tip is further from wrist than PIP joint (distTipToWrist > 1.12 * distPipToWrist)
+      // 2. Tip to MCP distance is larger than half palm scale (> 0.5 * palmScale)
+      // 3. The PIP joint angle is relatively straight
+      const isTipExtended = distTipToWrist > 1.12 * distPipToWrist;
+      const isLengthExtended = distTipToMCP > 0.52 * palmScale;
+      const isAngleStraight = isJointStraight(mcpNode, pipNode, tipNode, -0.82);
+
+      if ((isTipExtended && isLengthExtended) || (isTipExtended && isAngleStraight)) {
+        handFingers++;
+      }
     }
-    
-    totalFingers += raisedFingers;
+
+    // 2. Check Thumb (Landmarks 1: CMC, 2: MCP, 3: IP, 4: TIP)
+    const thumbMCP = hand[2];
+    const thumbIP = hand[3];
+    const thumbTip = hand[4];
+
+    const thumbDistToWrist = dist3D(wrist, thumbTip);
+    const thumbDistToIndexMCP = dist3D(indexMCP, thumbTip);
+    const thumbDistToMiddleMCP = dist3D(middleMCP, thumbTip);
+
+    // Thumb is extended away from palm if:
+    // - Distance from Thumb TIP (4) to Wrist (0) is at least 0.85x Palm Scale
+    // - AND Distance from Thumb TIP (4) to Index MCP (5) is at least 0.45x Palm Scale
+    // - AND Distance from Thumb TIP (4) to Middle MCP (9) is at least 0.55x Palm Scale
+    const isThumbOutward = thumbDistToIndexMCP > 0.45 * palmScale && thumbDistToMiddleMCP > 0.55 * palmScale;
+    const isThumbLength = thumbDistToWrist > 0.85 * palmScale;
+    const isThumbStraight = isJointStraight(thumbMCP, thumbIP, thumbTip, -0.80);
+
+    if (isThumbOutward && isThumbLength && isThumbStraight) {
+      handFingers++;
+    }
+
+    totalCount += handFingers;
   }
-  
-  return totalFingers;
+
+  return totalCount;
 }

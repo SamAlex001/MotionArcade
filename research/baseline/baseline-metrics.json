@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "project": "MotionArcade",
+  "git": {
+    "baselineCommit": "dca914cb9bc5d090a5914dd2311e264123309471",
+    "branch": "shubh",
+    "timestamp": "2026-06-16"
+  },
+  "platform": {
+    "framework": "Next.js 16.1.6 (App Router, Turbopack dev)",
+    "language": "TypeScript 5",
+    "runtime": "Browser (Chromium-based recommended)",
+    "modelPath": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+    "modelSizeBytes": 5242880
+  },
+  "hotPathBudgets": {
+    "desktopFrameMs": 16.7,
+    "mobileFrameMs":  33.0,
+    "comment": "Per-frame budgets at 60 fps desktop / 30 fps mobile."
+  },
+  "perFrameCosts_static_analysis": {
+    "setStateCallsPerSecond":        180,
+    "atan2CallsPerFrame":             10,
+    "domLayoutReadsPerFrame":         40,
+    "gradientCreationsPerFrame":      62,
+    "objectAllocationsPerFrame":      48,
+    "filterArrayAllocationsPerFrame":  3,
+    "fingertipMembershipScans":       21
+  },
+  "geometryCounts_baseline": {
+    "sphereSegments": 20,
+    "cylinderSegments": 10,
+    "jointMaterial": "MeshPhysicalMaterial(clearcoat=1.0)",
+    "boneMaterial": "MeshPhysicalMaterial(clearcoat=1.0)",
+    "jointSpheresOnScreen": 42,
+    "boneCylindersOnScreen": 42,
+    "trianglesPerSphere": 400,
+    "trianglesPerCylinder": 60,
+    "totalTrianglesOnScreen": 19320
+  },
+  "knownHotspots": [
+    "H1: setState-per-frame storm in useHandTracking",
+    "H2: dual atan2 in finger-counting",
+    "H3: uncached video-canvas mapping (DOM reads)",
+    "H4: MeshPhysicalMaterial + 20x20 sphere everywhere",
+    "H5: 60+ gradient creations per frame in drawFancy",
+    "H6: hand.map() allocation per frame",
+    "H7: particles.filter() and slice(-600) per frame",
+    "H8: FINGERTIP_INDICES.includes() linear scan",
+    "H9: Ping-Pong gradients recreated every frame",
+    "H10: Ping-Pong particles.filter() per frame",
+    "H11: useIsMobile causes double MediaPipe init",
+    "H12: Genkit AI modules bloating client bundles"
+  ]
+}

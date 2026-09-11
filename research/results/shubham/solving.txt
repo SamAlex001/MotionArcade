@@ -1,0 +1,1504 @@
+﻿================================================================================
+MOTIONARCADE: HOW MEDIAPIPE HAND TRACKING IS LINKED WITH GEMINI AI
+A Complete Technical Breakdown
+================================================================================
+Date: 2026-06-30
+Author: Research / Architecture Analysis
+Project: MotionArcade (D:\Projects\MotionArcade_test)
+================================================================================
+
+
+TABLE OF CONTENTS
+-----------------
+1.  The Core Problem Being Solved
+2.  Overview of the Solution Architecture
+3.  Layer 1 â€” MediaPipe Hand Tracking (Browser / Client)
+    3a. Initialization and the Singleton Pattern
+    3b. The HandLandmarker Configuration
+    3c. Mobile vs. Desktop Differences
+    3d. The Inference Loop (predictWebcam)
+    3e. The Landmark Data Structure
+    3f. Finger Counting â€” The Algorithm
+    3g. Video-to-Canvas Coordinate Mapping
+    3h. HAND_CONNECTIONS â€” the skeleton
+4.  Layer 2 â€” The useHandTracking() React Hook
+    4a. The Ref-First Hot Path
+    4b. The Throttled State Strategy
+    4c. Adaptive Frame Budget / Frame Skipping
+    4d. What the Hook Returns
+5.  Layer 3 â€” The Game Component (Orchestration Layer)
+    5a. How the Game Consumes Hand Tracking Data
+    5b. The State Machine Pattern
+    5c. The Canvas Overlay
+    5d. How and When the Game Calls Gemini AI
+6.  Layer 4 â€” Gemini AI via Genkit (Server / Next.js Server Actions)
+    6a. The ai Singleton (genkit.ts)
+    6b. How Genkit Flows Work
+    6c. Flow 1: quiz-quest-flow.ts â€” generateQuizQuestion
+    6d. Flow 2: dynamic-math-problem-generation.ts â€” generateMathProblem
+    6e. Flow 3: math-challenge-2-flow.ts â€” generateMathProblem2
+    6f. Flow 4: shape-challenge-flow.ts â€” generateShapeToDraw
+    6g. Flow 5: shape-challenge-flow.ts â€” evaluatePlayerDrawing (Vision)
+7.  The Data Flow: What Moves Between Layers
+    7a. MediaPipe â†’ Hook
+    7b. Hook â†’ Game Component
+    7c. Game Component â†’ Gemini
+    7d. Gemini â†’ Game Component
+8.  The Critical Special Case: Sketch & Score
+    8a. How It Differs From Every Other Game
+    8b. The Exact Mechanics of the Vision Path
+    8c. The Drawing Pipeline Step-by-Step
+9.  Performance Engineering: Why The Systems Don't Block Each Other
+    9a. The Timescale Problem
+    9b. Refs vs. State â€” The Core Insight
+    9c. Adaptive Frame Skipping
+    9d. Module-Level Singleton Caching
+    9e. The perf-monitor System
+10. Why MediaPipe and Gemini NEVER Talk Directly
+11. Games Catalogue â€” Which Systems Each Game Uses
+12. Package Dependencies
+13. Summary
+
+
+================================================================================
+1. THE CORE PROBLEM BEING SOLVED
+================================================================================
+
+MotionArcade needed to build a system where:
+
+  (a) A player's hand gestures, tracked in real time via the camera, control
+      game input (selecting an answer, drawing a shape, moving a paddle, etc.).
+
+  (b) The game content itself (questions, math problems, shape prompts, drawing
+      evaluations) is generated dynamically by a large language model (Gemini)
+      so that games are never repetitive.
+
+The fundamental engineering problem is that these two systems operate at
+completely incompatible timescales:
+
+  - MediaPipe must process video frames at 30â€“60 frames per second. At 60fps,
+    each frame budget is 16.7 milliseconds. Any operation that takes longer
+    than this will cause visible stutter or dropped frames.
+
+  - Gemini AI inference runs on a remote server and takes on the order of
+    hundreds of milliseconds to seconds to return a response. A typical
+    generateQuizQuestion call might take 800msâ€“2000ms depending on network
+    and server load.
+
+If you put the Gemini call inside the frame loop, the game freezes for up to
+2 seconds on every question. If you don't involve hand tracking at all with
+Gemini, the game has no AI-driven content.
+
+The solution is a strict three-layer architecture with a game component in the
+middle that coordinates between both without ever coupling their clocks.
+
+
+================================================================================
+2. OVERVIEW OF THE SOLUTION ARCHITECTURE
+================================================================================
+
+The architecture has exactly three layers:
+
+  LAYER 1: MediaPipe (Browser)
+  â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  Runs inside a WebAssembly module on the GPU. Processes each camera frame
+  and outputs normalized landmark coordinates. Operates at 30â€“60fps.
+  Has NO knowledge of Gemini AI or game logic.
+
+  LAYER 2: Game Component (Next.js Client Component â€” the orchestrator)
+  â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  Sits between both systems. Reads hand landmark data from refs (not state)
+  on every frame via requestAnimationFrame. Uses that data to drive a state
+  machine (PLAYING â†’ HOLDING â†’ FEEDBACK â†’ LOADING_PROBLEM â†’ PLAYING). When
+  the state machine transitions to a point where AI input is needed (e.g., a
+  new question is required), it fires an async call to Gemini â€” but this call
+  never blocks the frame loop. Has full knowledge of both systems.
+
+  LAYER 3: Gemini AI via Genkit (Next.js Server â€” 'use server')
+  â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  Runs entirely on the server as Next.js Server Actions. Receives structured
+  inputs from the game, calls the Gemini API via the Genkit framework, and
+  returns structured JSON validated by Zod schemas. Has NO knowledge of
+  MediaPipe or landmark coordinates (with one exception: Sketch & Score,
+  detailed in section 8).
+
+The data flows like this:
+
+  Camera â†’ MediaPipe WASM â†’ landmarksRef (every frame, no re-render)
+                         â†’ detectedFingers state (throttled, 50ms)
+                              â†“
+                       Game Component
+                              â†“ (reads refs in rAF)
+                      Game state machine
+                              â†“ (async, on game event)
+                     Gemini AI (Server Action)
+                              â†“ (structured JSON response)
+                       Game state update
+
+
+================================================================================
+3. LAYER 1 â€” MEDIAPIPE HAND TRACKING (BROWSER / CLIENT)
+================================================================================
+
+3a. INITIALIZATION AND THE SINGLETON PATTERN
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+File: src/hooks/use-hand-tracking.ts
+
+The HandLandmarker is expensive to initialize. Creating it involves:
+  1. Downloading the WASM fileset from:
+       https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm
+  2. Downloading the model from:
+       https://storage.googleapis.com/mediapipe-models/hand_landmarker/
+       hand_landmarker/float16/1/hand_landmarker.task
+  3. Compiling WASM in the browser.
+  4. Loading the model weights.
+  5. Initializing the GPU delegate.
+
+This takes approximately 600ms on a typical machine. If this ran every time
+a player navigated between games, the loading spinner would appear every time.
+
+To prevent this, three module-level variables are declared OUTSIDE the hook
+function â€” they live at module scope, meaning they persist as long as the
+JavaScript module is loaded (i.e., for the lifetime of the browser tab):
+
+  let visionFilesetPromise: Promise<any> | null = null;
+  let cachedHandLandmarker: HandLandmarker | null = null;
+  let cachedHandLandmarkerConfig: string | null = null;
+
+`visionFilesetPromise` is also deduplicated â€” the first call creates the
+promise; subsequent calls return the same promise. This means even if two
+components both mount simultaneously and both call `getVisionFileset()`, only
+one network request is made.
+
+The cached `HandLandmarker` is keyed by a config string:
+  `${numHands}|${detectionConf}|${trackingConf}`
+
+If the same config is requested again (e.g., navigating back to the same
+game), the existing HandLandmarker instance is reused immediately. On unmount,
+the HandLandmarker is explicitly NOT closed â€” the comment in the code states:
+  // Do NOT close the cached HandLandmarker on unmount â€” keep it warm for
+  // the next game route. It will be GC-ed when the tab closes.
+
+
+3b. THE HANDLANDMARKER CONFIGURATION
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+MediaPipe's HandLandmarker is created with these options:
+
+  Desktop config:
+    delegate:                    'GPU'  (falls back to 'CPU' on failure)
+    runningMode:                 'VIDEO'
+    numHands:                    2
+    minHandDetectionConfidence:  0.5
+    minHandTrackingConfidence:   0.5
+
+  Mobile config:
+    delegate:                    'GPU'  (falls back to 'CPU' on failure)
+    runningMode:                 'VIDEO'
+    numHands:                    1      â† Only 1 hand on mobile for performance
+    minHandDetectionConfidence:  0.4    â† Slightly more permissive
+    minHandTrackingConfidence:   0.4    â† Slightly more permissive
+
+The GPU delegate uses WebGL2 to run the neural network inference on the
+device's GPU, which is dramatically faster than CPU for matrix multiplication.
+The CPU fallback uses the standard WASM execution path.
+
+'VIDEO' running mode means MediaPipe expects frames at video timestamps and
+maintains hand tracking state between frames (rather than treating each frame
+as independent, which is 'IMAGE' mode). This gives much smoother tracking
+because the model can predict where the hand will be next frame.
+
+
+3c. MOBILE VS. DESKTOP DIFFERENCES
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Mobile detection uses a synchronous, UA-based check:
+
+  function detectMobileSync(): boolean {
+    const uad = (navigator as any).userAgentData;
+    if (uad && typeof uad.mobile === 'boolean') return uad.mobile;
+    return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  }
+
+This is called synchronously during the first render cycle and stored in a ref
+(`isMobileRef`). The advantage over the previous `useIsMobile()` hook approach
+is that `useIsMobile()` was async (it used `useEffect`), meaning MediaPipe
+would initialize with one config and then potentially re-initialize with the
+correct mobile config after the hook resolved â€” a ~600ms initialization cost
+paid twice.
+
+Camera resolution also differs:
+  Desktop: width: { ideal: 1280 }, height: { ideal: 720 }
+  Mobile:  width: { ideal: 480 },  height: { ideal: 640 }
+
+Lower resolution on mobile means MediaPipe's WASM has fewer pixels to process
+per frame, which directly reduces inference time.
+
+
+3d. THE INFERENCE LOOP (predictWebcam)
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+The inference loop is a `requestAnimationFrame`-based loop defined in the
+`predictWebcam` callback:
+
+  const predictWebcam = useCallback(() => {
+    // ... guard checks ...
+
+    // 1. Apply adaptive frame skip
+    frameCountRef.current++;
+    const skip = (isMobileRef.current ? 1 : 0) + skipFramesRef.current;
+    if (skip > 0 && frameCountRef.current % (skip + 1) !== 0) {
+      requestRef.current = requestAnimationFrame(predictWebcam);
+      return;  // skip this frame
+    }
+
+    // 2. Run MediaPipe inference
+    const startTimeMs = performance.now();
+    const results = landmarker.detectForVideo(video, startTimeMs);
+    const dt = performance.now() - startTimeMs;
+
+    // 3. Adapt skip count based on inference duration
+    const budget = isMobileRef.current ? 33 : 16.7;
+    if (dt > budget * 1.5) {
+      skipFramesRef.current = Math.min(skipFramesRef.current + 1, 3);
+    } else if (dt < budget * 0.6 && skipFramesRef.current > 0) {
+      skipFramesRef.current--;
+    }
+
+    // 4. Update refs (zero re-renders)
+    landmarksRef.current  = results.landmarks  || [];
+    handednessRef.current = results.handedness || [];
+    const fingers = countFingers(lm, hd);
+    detectedFingersRef.current = fingers;
+
+    // 5. Conditionally update React state (throttled)
+    // ...
+
+    // 6. Schedule next frame
+    requestRef.current = requestAnimationFrame(predictWebcam);
+  }, []);
+
+The key insight is that `landmarker.detectForVideo(video, startTimeMs)` is a
+synchronous call. It blocks the JavaScript thread while the GPU/WASM computes
+the result. This is fine at 16.7ms per frame, but if inference takes longer
+(e.g., 25ms under thermal throttling), the frame will be dropped anyway. The
+adaptive skip system detects this and deliberately skips frames to give the GPU
+more time per frame, maintaining responsiveness even when performance degrades.
+
+
+3e. THE LANDMARK DATA STRUCTURE
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+MediaPipe outputs a `Landmark[][]` where:
+  - Outer array = one element per detected hand (0, 1, or 2 hands).
+  - Inner array = exactly 21 landmarks per hand.
+  - Each Landmark = { x: number, y: number, z?: number }
+
+The x and y coordinates are NORMALIZED: they range from 0.0 to 1.0, where:
+  - (0, 0) = top-left of the video frame
+  - (1, 1) = bottom-right of the video frame
+  - x is MIRRORED (since the camera is front-facing): a hand on the right side
+    of the camera view has a lower x value (closer to 0)
+
+The z coordinate is optional and represents depth relative to the wrist.
+For hand tracking, it's always approximately 0 and is not used in the game
+logic.
+
+The 21 landmarks follow the MediaPipe hand landmark convention:
+  Index 0:  Wrist
+  Index 1:  Thumb CMC (carpometacarpal joint)
+  Index 2:  Thumb MCP (metacarpophalangeal joint)
+  Index 3:  Thumb IP  (interphalangeal joint)
+  Index 4:  Thumb Tip
+  Index 5:  Index MCP
+  Index 6:  Index PIP (proximal interphalangeal)
+  Index 7:  Index DIP (distal interphalangeal)
+  Index 8:  Index Tip   â† this is the "pointer" used for drawing/collision
+  Index 9:  Middle MCP
+  Index 10: Middle PIP
+  Index 11: Middle DIP
+  Index 12: Middle Tip
+  Index 13: Ring MCP
+  Index 14: Ring PIP
+  Index 15: Ring DIP
+  Index 16: Ring Tip
+  Index 17: Pinky MCP
+  Index 18: Pinky PIP
+  Index 19: Pinky DIP
+  Index 20: Pinky Tip
+
+The handedness output is `Handedness[][]` where each inner array contains the
+chirality label "Left" or "Right" (from the model's perspective, which means
+it's mirrored relative to the viewer's perspective for front-facing cameras).
+
+
+3f. FINGER COUNTING â€” THE ALGORITHM
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+File: src/lib/finger-counting.ts
+
+The `countFingers(landmarks, handedness)` function determines how many fingers
+are raised across all detected hands and returns a single integer (0â€“10).
+
+The algorithm uses cosine similarity to determine whether each finger is
+extended or curled. The reason cosine similarity is used instead of the more
+intuitive `Math.atan2` approach is performance:
+
+  atan2 approach (original):
+    - 2 calls to Math.atan2 per joint
+    - Each Math.atan2 internally computes ~2 atan2 + normalization
+    - ~120 nanoseconds per joint
+    - At 21 landmarks Ã— 30fps = 630 calls/second per hand
+
+  Cosine similarity approach (optimized):
+    - 1 dot product + 1 sqrt per joint
+    - ~5 nanoseconds per joint
+    - 24Ã— faster
+
+The mathematical basis:
+  Two vectors u = (a âˆ’ b) and v = (c âˆ’ b) are computed for each joint triple
+  (a, b, c). When the finger is straight, these vectors point in opposite
+  directions, so their cosine is close to âˆ’1. The threshold for "straight" is:
+
+    Regular fingers: cos(angle) < âˆ’0.9397  (equivalent to angle > 160Â°)
+    Thumb:          cos(angle) < âˆ’0.8660  (equivalent to angle > 150Â°)
+
+  The thumb uses a looser threshold because it has a different anatomy and
+  doesn't extend as far back as the other fingers.
+
+The landmark indices used for each finger (stored in a pre-allocated Int8Array
+to avoid per-call heap allocation):
+
+  FINGER_TRIPLES = [
+    5,  6,  8,   // Index:  MCP â†’ PIP â†’ Tip
+    9, 10, 12,   // Middle: MCP â†’ PIP â†’ Tip
+    13, 14, 16,  // Ring:   MCP â†’ PIP â†’ Tip
+    17, 18, 20,  // Pinky:  MCP â†’ PIP â†’ Tip
+  ]
+  THUMB: 1 â†’ 2 â†’ 3  (CMC â†’ MCP â†’ IP)
+
+The function iterates over all detected hands (up to 2 on desktop) and sums
+the raised finger counts. The result is therefore 0â€“5 for one hand or 0â€“10
+for two hands.
+
+NOTE: The `_handedness` parameter is accepted but currently unused. In an
+earlier version, handedness was used to adjust thumb detection (since the
+thumb's geometry is mirrored between left and right hands), but the cosine
+approach's symmetry made this unnecessary.
+
+
+3g. VIDEO-TO-CANVAS COORDINATE MAPPING
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+File: src/lib/video-utils.ts
+
+MediaPipe outputs normalized coordinates (0â€“1) relative to the video frame.
+But the video is displayed with CSS `object-fit: cover`, which means the
+browser scales and crops the video to fill its container while preserving
+aspect ratio. If you simply multiply `landmark.x * canvas.width`, the overlay
+points will not align with the actual hand in the video.
+
+The mapping math:
+
+  1. Get raw video dimensions: videoWidth Ã— videoHeight (e.g., 1280 Ã— 720)
+  2. Get displayed dimensions: clientWidth Ã— clientHeight (e.g., 400 Ã— 533)
+  3. Compute scale = max(clientWidth/videoWidth, clientHeight/videoHeight)
+     This is the `object-fit: cover` scale â€” the video is scaled up so it
+     fills the container in BOTH dimensions, with overflow cropped.
+  4. scaledW = videoWidth * scale
+     scaledH = videoHeight * scale
+  5. offsetX = (scaledW âˆ’ clientWidth) / 2
+     offsetY = (scaledH âˆ’ clientHeight) / 2
+     These are how many pixels of the scaled video are cropped on each side.
+  6. pixel_x = landmark.x * scaledW âˆ’ offsetX
+     pixel_y = landmark.y * scaledH âˆ’ offsetY
+  7. Apply mirror: pixel_x = clientWidth âˆ’ pixel_x
+     (Because MediaPipe's x is mirrored for front-facing cameras, and the CSS
+     `scale-x-[-1]` applied to the video also mirrors it â€” so we need to
+     mirror the x coordinate to match the video display.)
+
+This computation is cached in a WeakMap<HTMLVideoElement, CachedMapping>. The
+cache is invalidated only when videoWidth, videoHeight, clientWidth, or
+clientHeight change. The WeakMap ensures that when the video element is
+garbage-collected (component unmounts), the cache entry is automatically freed.
+
+Several utility functions are provided:
+
+  landmarkToCanvas(lx, ly, video, mirror=true)
+    â†’ { x: number, y: number }
+    Single-call conversion, reads from cache.
+
+  createLandmarkMapper(video, mirror=true)
+    â†’ (lx, ly) => { x, y }
+    Returns a closure with the mapping pre-captured. Faster for batch
+    conversions of all 21 landmarks in one frame since the cache lookup
+    only happens once.
+
+  createNormalizedMapper(video, mirror=true)
+    â†’ (lx, ly) => { nx, ny }
+    Same but returns 0â€“1 normalized coordinates relative to the display
+    area (not pixel coordinates). Useful for collision detection that
+    works in normalized space.
+
+
+3h. HAND_CONNECTIONS â€” THE SKELETON
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+File: src/lib/constants.ts
+
+  import { HandLandmarker } from '@mediapipe/tasks-vision';
+  export const HAND_CONNECTIONS = HandLandmarker.HAND_CONNECTIONS;
+
+`HandLandmarker.HAND_CONNECTIONS` is a static array of [from, to] index pairs
+that define the "bones" of the hand skeleton. This is used by game components
+to draw the hand skeleton overlay on the canvas. Each pair indicates that a
+line should be drawn from landmark[from] to landmark[to].
+
+There are 21 connections total, covering the thumb, four fingers, and the
+palm.
+
+
+================================================================================
+4. LAYER 2 â€” THE useHandTracking() REACT HOOK
+================================================================================
+
+File: src/hooks/use-hand-tracking.ts
+Directive: 'use client' (runs only in the browser)
+
+The hook is the bridge between raw MediaPipe output and the React component
+world. It handles initialization, the inference loop, and the state management
+strategy.
+
+
+4a. THE REF-FIRST HOT PATH
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Three refs are declared that are updated on EVERY frame:
+
+  const landmarksRef       = useRef<Landmark[][]>([]);
+  const handednessRef      = useRef<Handedness[][]>([]);
+  const detectedFingersRef = useRef<number>(0);
+
+These are updated synchronously inside `predictWebcam` after each inference:
+
+  landmarksRef.current  = results.landmarks  || [];
+  handednessRef.current = results.handedness || [];
+  detectedFingersRef.current = countFingers(lm, hd);
+
+Reading a ref value (`ref.current`) triggers zero React machinery. No state
+update, no re-render scheduling, no diffing. The game's own requestAnimationFrame
+loop can read `landmarksRef.current` at any time and always get the freshest
+data, at zero cost.
+
+This is the critical insight: the game's rendering loop (rAF) and MediaPipe's
+inference loop (also rAF-based) run independently. The game doesn't wait for
+MediaPipe â€” it reads whatever is in the ref at the moment it needs it.
+
+
+4b. THE THROTTLED STATE STRATEGY
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+React state updates also exist alongside the refs:
+
+  const [detectedFingers, setDetectedFingers] = useState(0);
+  const [handedness, setHandedness]           = useState<Handedness[][]>([]);
+  const [landmarks, setLandmarks]             = useState<Landmark[][]>([]);
+
+These are updated under a carefully designed throttling strategy with three
+triggers, whichever fires first:
+
+  Trigger 1: Hand count changes (rare event â€” a hand enters or leaves frame)
+    â†’ Immediately update landmarks, handedness
+    â†’ Reset the 200ms heartbeat timer
+
+  Trigger 2: Finger count integer changes (moderately rare â€” player changes
+    their finger configuration)
+    â†’ Immediately update detectedFingers
+
+  Trigger 3: Heartbeat â€” 50ms have elapsed since the last state update
+    â†’ Update landmarks regardless (keeps useEffect-based consumers fresh)
+
+  const STATE_UPDATE_MS = 50;  // 20 Hz heartbeat
+
+  if (handCountChanged) {
+    setLandmarks(lm);
+    setHandedness(hd);
+    lastStateUpdateMs.current = startTimeMs;
+  } else if (heartbeatDue) {
+    setLandmarks(lm);
+    lastStateUpdateMs.current = startTimeMs;
+  }
+  if (fingerCountChanged) {
+    setDetectedFingers(fingers);
+  }
+
+The original implementation called `setLandmarks` on every frame (60 times
+per second). Under React 19 / Next.js 16 dev mode, this triggered the
+"Maximum update depth exceeded" safety throttle because each setState caused
+dependent useEffects to fire, which could cause further state updates,
+creating a cascade.
+
+The throttled approach reduces state updates by approximately 95% compared
+to the naive implementation, while still keeping the state fresh enough
+for UI purposes (20 Hz is plenty for showing a finger count or hand skeleton).
+
+
+4c. ADAPTIVE FRAME BUDGET / FRAME SKIPPING
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+The inference loop adapts dynamically to the device's performance:
+
+  const budget = isMobileRef.current ? 33 : 16.7;  // ms per frame target
+  if (dt > budget * 1.5) {
+    skipFramesRef.current = Math.min(skipFramesRef.current + 1, 3);  // cap at 3
+  } else if (dt < budget * 0.6 && skipFramesRef.current > 0) {
+    skipFramesRef.current--;
+  }
+
+When inference exceeds 1.5Ã— the budget (e.g., 25ms on desktop), the skip
+count increments. On the next frame, if `frameCount % (skip + 1) !== 0`,
+the inference is skipped entirely â€” just the rAF is rescheduled.
+
+This means:
+  skip=0: run every frame (60fps target)
+  skip=1: run every 2nd frame (30fps target)
+  skip=2: run every 3rd frame (20fps target)
+  skip=3: run every 4th frame (15fps target)
+
+Mobile always starts with skip=1 (implicit) because:
+  const skip = (isMobileRef.current ? 1 : 0) + skipFramesRef.current;
+
+So mobile starts at run-every-2nd-frame and can adapt further. This gives a
+30fps baseline on mobile without trying to use a frame budget it can't meet.
+
+
+4d. WHAT THE HOOK RETURNS
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+The complete interface returned by useHandTracking():
+
+  type HandTrackingHook = {
+    videoRef: React.RefObject<HTMLVideoElement>;
+      // Attach to <video> element via ref={videoRef}
+
+    detectedFingers: number;
+      // Throttled state â€” for useEffect-based game logic (answer selection)
+
+    handedness: Handedness[][];
+      // Updated when hand count changes (for games that care which hand is which)
+
+    landmarks: Landmark[][];
+      // 20Hz heartbeat state â€” for canvas rendering in useEffect
+
+    landmarksRef: React.MutableRefObject<Landmark[][]>;
+      // Always-fresh â€” read inside requestAnimationFrame loops
+
+    handednessRef: React.MutableRefObject<Handedness[][]>;
+      // Always-fresh â€” for real-time chirality checks in rAF loops
+
+    detectedFingersRef: React.MutableRefObject<number>;
+      // Always-fresh â€” for real-time finger count in rAF loops
+
+    startVideo: () => Promise<void>;
+      // Call to begin camera stream and inference loop
+
+    stopVideo: () => void;
+      // Call to stop camera and cancel rAF loop; clears refs
+
+    isLoading: boolean;
+      // True while MediaPipe model is being downloaded/compiled
+
+    error: string | null;
+      // Set if camera permission denied or model init fails
+  };
+
+
+================================================================================
+5. LAYER 3 â€” THE GAME COMPONENT (ORCHESTRATION LAYER)
+================================================================================
+
+Each game is a Next.js Client Component (marked 'use client'). The game
+component is the only place in the codebase that imports from BOTH the
+hand tracking hook AND the Gemini AI flows. It is the explicit link between
+the two systems.
+
+
+5a. HOW THE GAME CONSUMES HAND TRACKING DATA
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+From QuizQuestClient.tsx:
+
+  const {
+    videoRef,
+    detectedFingers,  â† throttled state, used in useEffect
+    landmarks,        â† 20Hz state, used for canvas overlay
+    startVideo,
+    stopVideo,
+    isLoading: isHandTrackingLoading,
+    error: handTrackingError
+  } = useHandTracking();
+
+The game reads `detectedFingers` (the throttled state) inside useEffect to
+trigger game state transitions:
+
+  useEffect(() => {
+    if (gameState !== 'PLAYING' || !currentProblem) return;
+
+    if (detectedFingers > 0 && detectedFingers <= currentProblem.options.length) {
+      // Player is showing a valid number of fingers
+      setPotentialAnswer(detectedFingers);
+      setHoldTime(ANSWER_HOLD_SECONDS);  // Start 3-second hold countdown
+      setGameState('HOLDING');
+    }
+  }, [detectedFingers, gameState, currentProblem]);
+
+This is React-idiomatic: useEffect fires when `detectedFingers` changes,
+which happens at 20Hz (not 60Hz), so this runs at most 20 times per second.
+
+For canvas overlay drawing (rendering the hand skeleton / wrist indicator),
+the game uses the `landmarks` state in another useEffect:
+
+  useEffect(() => {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (landmarks.length > 0 && ['PLAYING', 'HOLDING'].includes(gameState)) {
+      const wrist = landmarks[0][0];  // landmark 0 = wrist
+      const { x, y } = landmarkToCanvas(wrist.x, wrist.y, video);
+      // Draw circle + finger count number at wrist position
+      ctx.arc(x, y - 40, 30, 0, 2 * Math.PI);
+      ctx.fillText(detectedFingers.toString(), x, y - 40);
+    }
+  }, [landmarks, detectedFingers, gameState, videoRef]);
+
+
+5b. THE STATE MACHINE PATTERN
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Quiz Quest's state machine:
+
+  type GameState =
+    | 'SUBJECT_SELECTION'   // Initial screen â€” player picks topics
+    | 'LOADING'             // Camera starting + first question loading
+    | 'PLAYING'             // Question displayed, timer counting down
+    | 'HOLDING'             // Player is holding fingers up, 3s countdown
+    | 'FEEDBACK'            // Show correct/incorrect for 2 seconds
+    | 'LOADING_PROBLEM';    // Fetching next question from Gemini
+
+State transitions:
+
+  SUBJECT_SELECTION â†’ LOADING        (player clicks Start)
+  LOADING â†’ PLAYING                  (camera started, first question loaded)
+  PLAYING â†’ HOLDING                  (detectedFingers > 0)
+  HOLDING â†’ PLAYING                  (player changes finger count)
+  HOLDING â†’ FEEDBACK                 (holdTime reaches 0)
+  PLAYING â†’ FEEDBACK                 (timeLeft reaches 0, wrong)
+  FEEDBACK â†’ LOADING_PROBLEM         (after 2s, automatically)
+  LOADING_PROBLEM â†’ PLAYING          (Gemini returns next question)
+
+The Gemini AI call happens in the LOADING_PROBLEM state:
+
+  const fetchNewProblem = useCallback(async () => {
+    setGameState('LOADING_PROBLEM');
+    try {
+      const subjects = getFinalSubjects();
+      const problem = await generateQuizQuestion({ currentScore: score, subjects });
+      // â†‘ This await can take 800msâ€“2000ms. The UI shows a loading spinner.
+      setCurrentProblem(problem);
+      setTimeLeft(THINKING_TIMER_SECONDS);
+      setGameState('PLAYING');
+    } catch (error) {
+      // Handle failure gracefully
+      setGameState('SUBJECT_SELECTION');
+    }
+  }, [score, toast, getFinalSubjects]);
+
+The critical point: while `await generateQuizQuestion(...)` is pending, the
+entire game component is in 'LOADING_PROBLEM' state. The camera is still
+running, MediaPipe is still inferring, and landmarksRef is still being
+updated every frame. But the game loop is not processing hand gestures during
+this period â€” it only processes gestures in 'PLAYING' and 'HOLDING' states.
+This means the async gap is invisible to the user: they see a spinner, then
+the next question appears.
+
+
+5c. THE CANVAS OVERLAY
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Games use an HTML5 canvas element positioned absolutely on top of the video:
+
+  <video ref={videoRef} className="w-full h-full object-cover scale-x-[-1]" />
+  <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full" />
+
+The `scale-x-[-1]` CSS transform on the video horizontally mirrors the display,
+so the player sees a natural "mirror" view. The canvas overlay uses the
+`landmarkToCanvas()` utility (with `mirror=true`) to ensure that drawings
+align with the mirrored video.
+
+Games that need per-frame canvas rendering (e.g., Sketch & Score, Ping Pong)
+set up their own rAF loop and read from `landmarksRef.current` directly, NOT
+from the `landmarks` state, to get zero-latency data.
+
+
+5d. HOW AND WHEN THE GAME CALLS GEMINI AI
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+The game calls Gemini AI in exactly two scenarios:
+  1. When it needs new content (a new question, problem, or shape prompt).
+  2. When it needs to evaluate player output (Sketch & Score only).
+
+These calls are always:
+  - `async` / `await` â€” they never block the UI thread.
+  - Wrapped in `try/catch` â€” failures show a toast and reset to a safe state.
+  - Wrapped in `useCallback` â€” to avoid recreating the function on every render.
+  - Only called on specific state transitions â€” NOT called on every frame or
+    on every hand gesture.
+
+The Gemini call is a direct function import. There is no REST API, no fetch(),
+no axios. It is a Next.js Server Action:
+
+  import { generateQuizQuestion } from '@/ai/flows/quiz-quest-flow';
+  // ...
+  const problem = await generateQuizQuestion({ currentScore: score, subjects });
+
+Next.js compiles this import into an RPC call under the hood. The function
+appears to the client as a regular async function, but it actually serializes
+the arguments, sends them to the server over HTTP, executes the function on
+the server, serializes the result, and returns it to the client. All of this
+is invisible to the game component â€” it just awaits a result.
+
+
+================================================================================
+6. LAYER 4 â€” GEMINI AI VIA GENKIT (SERVER / NEXT.JS SERVER ACTIONS)
+================================================================================
+
+6a. THE ai SINGLETON (genkit.ts)
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+File: src/ai/genkit.ts
+
+  import { genkit } from 'genkit';
+  import { googleAI } from '@genkit-ai/google-genai';
+
+  export const ai = genkit({
+    plugins: [googleAI()],
+    model: 'googleai/gemini-2.5-flash-lite',
+  });
+
+This is the single configuration point for all AI in the application.
+
+  `genkit({ plugins: [googleAI()] })`:
+    Registers the Google AI plugin, which handles API key management
+    (from environment variable GOOGLE_GENAI_API_KEY or GEMINI_API_KEY)
+    and routes requests to the Google AI API.
+
+  `model: 'googleai/gemini-2.5-flash-lite'`:
+    Sets the default model for all flows. Gemini 2.5 Flash Lite is chosen
+    specifically because it is:
+    - Fast: Lower latency than Gemini 2.5 Pro or Gemini 2.5 Flash.
+    - Cost-effective: Significantly lower cost per token.
+    - Sufficient: The tasks (generate a question, validate an answer, name
+      a shape) do not require the full reasoning capacity of larger models.
+    - Vision-capable: Can process image inputs (used in Sketch & Score).
+
+The `ai` object is exported as a singleton and imported by all flow files.
+
+
+6b. HOW GENKIT FLOWS WORK
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Genkit organizes AI logic into "flows" â€” named, typed, observable async
+functions that wrap LLM calls. A flow has:
+
+  1. An input schema (Zod) â€” validates what the caller passes in.
+  2. An output schema (Zod) â€” validates what the LLM returns.
+  3. A prompt template (Handlebars-style) â€” the actual instruction to Gemini.
+  4. An async function body â€” calls the prompt and returns the validated output.
+
+The Zod schema serves two purposes:
+  a. Runtime validation: If Gemini returns JSON that doesn't match the schema,
+     Genkit will throw or prompt Gemini to retry.
+  b. Type generation: `z.infer<typeof Schema>` produces TypeScript types that
+     are shared between server and client, ensuring type safety across the
+     entire call stack.
+
+Each flow file is marked `'use server'` at the top, which is a Next.js 14+
+directive that tells the bundler: "this file and everything it imports should
+ONLY run on the server." The client-side bundle will never contain this code.
+Instead, Next.js generates an RPC stub that the client can call.
+
+
+6c. FLOW 1: quiz-quest-flow.ts â€” generateQuizQuestion
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Input schema:
+  {
+    currentScore: number   // Used for optional difficulty scaling
+    subjects: string[]     // e.g., ["History", "Science"] or ["World War 2"]
+  }
+
+Output schema (strictly validated by Zod):
+  {
+    question: string               // The trivia question text
+    options: string[]              // EXACTLY 4 answer strings (enforced)
+    correctAnswerIndex: number     // 0, 1, 2, or 3 (min/max enforced by Zod)
+  }
+
+Prompt (abbreviated):
+  "You are a quiz master for a fun, educational game. Generate a trivia
+   question based on the following subjects: {{{subjects}}}.
+   The question must be answerable within 10 seconds.
+   Provide 4 distinct options for the answer.
+   The player's current score is {{{currentScore}}}."
+
+The `{{{subjects}}}` and `{{{currentScore}}}` are Handlebars-style template
+placeholders that Genkit replaces with the actual input values before sending
+to Gemini.
+
+How the game uses the output:
+  - `question` is displayed as the question text.
+  - `options[0]` through `options[3]` are displayed as cards numbered 1â€“4.
+  - Player shows `correctAnswerIndex + 1` fingers to select the correct answer.
+  - After the hold timer expires: `(potentialAnswer - 1) === correctAnswerIndex`
+    determines if the answer was correct.
+
+
+6d. FLOW 2: dynamic-math-problem-generation.ts â€” generateMathProblem
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Input schema:
+  {
+    difficulty: number    // 1â€“10 (Zod enforces min/max)
+    currentScore: number
+    pastScores: number[]
+  }
+
+Output schema:
+  {
+    problem: string    // The math problem text
+    solution: number   // Integer, 0â€“10 ONLY (Zod enforces)
+  }
+
+The solution is constrained to 0â€“10 because in Math Challenge 1, the player
+answers by showing 0â€“10 fingers. The prompt extensively describes what each
+difficulty level means:
+  Level 1: Simple addition (e.g., "3 + 5")
+  Level 5: Division and mixed operations
+  Level 8: Three-step problems
+  Level 10: Complex multi-step word problems
+
+IMPORTANT CONSTRAINT: The answer MUST be 0â€“10 even at level 10. The Zod
+schema enforces `.int().min(0).max(10)` so if Gemini returns a solution
+outside this range, Genkit rejects it.
+
+
+6e. FLOW 3: math-challenge-2-flow.ts â€” generateMathProblem2
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Input schema:
+  {
+    difficulty: number    // 1â€“10
+    currentScore: number
+  }
+
+Output schema:
+  {
+    problem: string
+    options: number[]    // 4â€“6 plausible numeric options (Zod: min(4).max(6))
+    correctAnswer: number   // MUST be one of the values in options
+  }
+
+This flow is used in Math Challenge 2, where the player pops bubbles with their
+index finger. Each bubble contains a number from `options`. The player pops the
+bubble containing `correctAnswer`.
+
+The constraint "correctAnswer MUST be one of the options" is explicitly stated
+in the prompt to prevent Gemini from generating an answer not present in the
+displayed options (which would make the game unwinnable).
+
+
+6f. FLOW 4: shape-challenge-flow.ts â€” generateShapeToDraw
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Input schema:
+  {
+    pastShapes: string[]   // Shapes already shown this session
+  }
+
+Output schema:
+  {
+    shape: string   // One of: "circle", "square", "triangle", "star",
+                    // "heart", "arrow", "house"
+  }
+
+The `pastShapes` input prevents Gemini from repeating a shape the player has
+already drawn in the current session. The prompt explicitly lists the available
+shapes and instructs Gemini to choose one NOT in `pastShapes`.
+
+How the game uses this:
+  - On game start and after each round, `generateShapeToDraw({ pastShapes: drawnShapes })`
+    is called.
+  - The returned shape name is used to display an icon (from Lucide React) to
+    the player showing what to draw.
+  - The shape name is also sent to `evaluatePlayerDrawing` when the player
+    submits their drawing.
+
+
+6g. FLOW 5: shape-challenge-flow.ts â€” evaluatePlayerDrawing (VISION)
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+This is the most complex flow and the one that directly processes player output.
+
+Input schema:
+  {
+    shapeToDraw: string    // e.g., "circle"
+    drawingDataUri: string // data:image/png;base64,<base64-encoded PNG>
+  }
+
+Output schema:
+  {
+    isMatch: boolean    // Did the drawing match the shape?
+    feedback: string    // Brief encouraging message
+  }
+
+Prompt:
+  "You are an AI judge for a drawing game. Your goal is to determine if a
+   player's drawing reasonably matches the shape they were asked to draw.
+   Be lenient, as the player is drawing in the air with their finger.
+
+   Shape to draw: {{{shapeToDraw}}}
+
+   {{media url=drawingDataUri}}  â† This sends the image to Gemini's vision input
+
+   Analyze the image and determine if it's a recognizable version of the shape.
+   For example, a square with wobbly lines is still a square."
+
+The `{{media url=drawingDataUri}}` syntax is Genkit's special directive for
+injecting image content into the prompt. Genkit extracts the base64 data from
+the data URI and sends it as a multipart message to Gemini's vision API.
+
+The instruction to "be lenient" is intentional â€” since players are drawing
+with their index finger tracked by MediaPipe (not a stylus), the lines will
+be imprecise.
+
+
+================================================================================
+7. THE DATA FLOW: WHAT MOVES BETWEEN LAYERS
+================================================================================
+
+7a. MEDIAPIPE â†’ HOOK
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+On every inference frame:
+  results.landmarks â†’ Landmark[][] (21 landmarks per hand, normalized 0-1 coords)
+  results.handedness â†’ Handedness[][] (chirality: "Left" or "Right" per hand)
+
+These are stored immediately in refs:
+  landmarksRef.current = results.landmarks
+  handednessRef.current = results.handedness
+
+Then `countFingers` is called synchronously:
+  detectedFingersRef.current = countFingers(landmarksRef.current, handednessRef.current)
+
+React state is updated conditionally (see section 4b).
+
+
+7b. HOOK â†’ GAME COMPONENT
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+The hook exposes both the always-fresh refs AND the throttled state:
+
+  REFS (every frame, zero re-renders, used in rAF-based game loops):
+    landmarksRef.current: Landmark[][]
+    handednessRef.current: Handedness[][]
+    detectedFingersRef.current: number
+
+  STATE (20Hz throttled, triggers React re-renders and useEffect):
+    landmarks: Landmark[][]      â†’ used for canvas overlay rendering
+    handedness: Handedness[][]   â†’ used for per-hand logic
+    detectedFingers: number      â†’ used for answer selection logic
+
+
+7c. GAME COMPONENT â†’ GEMINI
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Quiz Quest:
+  await generateQuizQuestion({
+    currentScore: score,          // number
+    subjects: ["History", "Science"]  // string[]
+  })
+
+Math Challenge (finger answer, 0-10):
+  await generateMathProblem({
+    difficulty: 5,           // number 1-10
+    currentScore: score,     // number
+    pastScores: [3, 5, 4]    // number[]
+  })
+
+Math Challenge 2 (bubble pop):
+  await generateMathProblem2({
+    difficulty: 7,      // number 1-10
+    currentScore: score // number
+  })
+
+Sketch & Score (shape request):
+  await generateShapeToDraw({
+    pastShapes: ["circle", "square"]  // string[]
+  })
+
+Sketch & Score (drawing evaluation â€” THE SPECIAL CASE):
+  await evaluatePlayerDrawing({
+    shapeToDraw: "circle",               // string
+    drawingDataUri: "data:image/png;base64,iVBOR..."  // PNG base64
+  })
+
+
+7d. GEMINI â†’ GAME COMPONENT
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+All responses are structured JSON, validated by Zod before being returned:
+
+Quiz Quest response:
+  {
+    question: "What is the capital of France?",
+    options: ["London", "Berlin", "Paris", "Madrid"],
+    correctAnswerIndex: 2
+  }
+
+Math Challenge (finger) response:
+  {
+    problem: "A bus starts with 10 people...",
+    solution: 5   // always 0-10
+  }
+
+Math Challenge 2 (bubble) response:
+  {
+    problem: "6 * 7",
+    options: [36, 42, 48, 49],
+    correctAnswer: 42
+  }
+
+Shape request response:
+  {
+    shape: "triangle"
+  }
+
+Drawing evaluation response:
+  {
+    isMatch: true,
+    feedback: "Great triangle! Those three corners are very clear."
+  }
+
+
+================================================================================
+8. THE CRITICAL SPECIAL CASE: SKETCH & SCORE
+================================================================================
+
+8a. HOW IT DIFFERS FROM EVERY OTHER GAME
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+In every other game:
+  - MediaPipe landmark data is used for INPUT only (gestures â†’ game events).
+  - Gemini AI is used for CONTENT GENERATION only (questions, problems).
+  - These two systems produce/consume completely different kinds of data.
+  - No hand tracking data ever reaches Gemini.
+
+In Sketch & Score:
+  - MediaPipe landmark data is used to GENERATE A DRAWING on a canvas.
+  - That DRAWING is then sent to Gemini as IMAGE INPUT.
+  - So hand tracking data (indirectly, transformed into pixel strokes) DOES
+    reach Gemini â€” but only after being transformed into a visual artifact.
+
+This is the only place in the entire codebase where the MediaPipe and Gemini
+layers are connected through a shared data artifact rather than being kept
+completely separate.
+
+
+8b. THE EXACT MECHANICS OF THE VISION PATH
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+The player selects a drawing hand (Left or Right) at the start of the game.
+MediaPipe tracks both hands; the code distinguishes them by handedness:
+
+  for (let i = 0; i < handedness.length; i++) {
+    if (handedness[i][0].categoryName === drawingHand) {
+      drawingHandLandmarks = landmarks[i];   // The hand that draws
+    } else {
+      gestureHandLandmarks = landmarks[i];   // The other hand (controls eraser size)
+    }
+  }
+
+The drawing hand's INDEX FINGERTIP (landmark[8]) is the "pen":
+
+  const isPointing = (handLandmarks): boolean => {
+    const indexTip = handLandmarks[8];
+    const indexPip = handLandmarks[6];
+    const middleTip = handLandmarks[12];
+    const middlePip = handLandmarks[10];
+    const ringTip = handLandmarks[16];
+    const ringPip = handLandmarks[14];
+    const pinkyTip = handLandmarks[20];
+    const pinkyPip = handLandmarks[18];
+    return (
+      indexTip.y < indexPip.y &&  // Index finger extended upward
+      middleTip.y > middlePip.y && // Middle finger curled
+      ringTip.y > ringPip.y &&     // Ring finger curled
+      pinkyTip.y > pinkyPip.y      // Pinky curled
+    );
+  };
+
+When `isPointing` is true, the normalized coordinates of landmark[8] are
+converted to canvas pixels via `landmarkToCanvas(activeLandmark.x, activeLandmark.y, video, true)`.
+
+The stroke is drawn using quadratic Bezier curves (smoother than straight lines
+between successive positions):
+
+  drawingCtx.quadraticCurveTo(
+    lastPosition.x, lastPosition.y,
+    midPoint.x, midPoint.y
+  );
+
+The midpoint technique (using the average of consecutive positions as the
+curve endpoint) produces a smooth stroke that doesn't have sharp corners at
+each sampled position.
+
+Eraser mode is controlled by a pinch gesture (desktop):
+
+  const isPinching = (handLandmarks): boolean => {
+    const thumbTip = handLandmarks[4];
+    const indexTip = handLandmarks[8];
+    const distance = Math.sqrt(
+      Math.pow(thumbTip.x - indexTip.x, 2) +
+      Math.pow(thumbTip.y - indexTip.y, 2) +
+      Math.pow((thumbTip.z || 0) - (indexTip.z || 0), 2)
+    );
+    return distance < 0.05;  // in normalized coordinates
+  }
+
+The second hand (gesture hand) controls eraser size in desktop mode:
+  const distance = Math.sqrt(
+    Math.pow(thumbTip.x - indexTip.x, 2) +
+    Math.pow(thumbTip.y - indexTip.y, 2)
+  );
+  const newSize = MIN_ERASER_SIZE + (distance / 0.3) * (MAX_ERASER_SIZE - MIN_ERASER_SIZE);
+  // MIN=5, MAX=50 pixels
+
+Special gestures:
+  - Show 10 fingers â†’ (desktop) starts the countdown or clears the canvas
+  - This is edge-triggered via `tenFingersHeldRef` to prevent repeated firing
+
+
+8c. THE DRAWING PIPELINE STEP-BY-STEP
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+Step 1: Player draws with index finger.
+  Index fingertip position (landmark[8]) â†’ landmarkToCanvas() â†’ pixel (x, y)
+
+Step 2: Stroke rendered to drawingCanvasRef.
+  drawingCtx.quadraticBezierTo(...)
+  drawingCtx.strokeStyle = 'black'; lineWidth = 5;
+  (or) drawingCtx.globalCompositeOperation = 'destination-out'; (eraser)
+
+Step 3: Player clicks "Submit Drawing".
+  handleSubmit() is called.
+
+Step 4: Canvas is composited onto a white background.
+  const tempCanvas = document.createElement('canvas');
+  const tempCtx = tempCanvas.getContext('2d');
+  tempCtx.fillStyle = '#FFFFFF';
+  tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+  tempCtx.drawImage(sourceCanvas, 0, 0);  // Drawing on white bg
+
+  NOTE: The source canvas has a transparent background. Compositing onto
+  white ensures that Gemini receives a clean black-on-white image, not a
+  drawing with transparency that might confuse the vision model.
+
+Step 5: Canvas captured as base64 PNG.
+  const drawingDataUri = tempCanvas.toDataURL('image/png');
+  // Produces: "data:image/png;base64,iVBORw0KGgo..."
+
+Step 6: Sent to Gemini via the evaluatePlayerDrawing Server Action.
+  const result = await evaluatePlayerDrawing({
+    shapeToDraw: shapeToDraw,    // e.g., "circle"
+    drawingDataUri               // the full base64 string
+  });
+
+Step 7: Gemini's vision model analyzes the image.
+  The `{{media url=drawingDataUri}}` in the prompt injects the PNG as a
+  multipart image input. Gemini 2.5 Flash Lite's vision capability analyzes
+  the pixel data and compares it to the expected shape.
+
+Step 8: Result displayed to player.
+  result.isMatch â†’ green checkmark or red X
+  result.feedback â†’ displayed as text message
+  If isMatch: score++
+
+Step 9: Next round begins.
+  clearCanvas() clears the drawing canvas.
+  fetchNewShape() calls generateShapeToDraw() with updated pastShapes.
+
+
+================================================================================
+9. PERFORMANCE ENGINEERING: WHY THE SYSTEMS DON'T BLOCK EACH OTHER
+================================================================================
+
+9a. THE TIMESCALE PROBLEM
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+MediaPipe (continuous, fast):
+  Frame budget: 16.7ms (desktop 60fps) or 33ms (mobile 30fps)
+  Inference time: typically 8â€“20ms on modern hardware with GPU delegate
+  Operates: Every single frame, non-stop while camera is active
+
+Gemini AI (sporadic, slow):
+  Typical latency: 500msâ€“2000ms (network + server + inference)
+  Operates: Only when game logic requests new content
+  For Quiz Quest: roughly every 12 seconds (10s thinking + 2s feedback)
+  For Sketch & Score: every time a drawing is submitted
+
+These two systems have roughly a 100:1 latency ratio. Naively putting them
+in the same execution path would mean the game freezes for 1â€“2 seconds every
+time AI is called.
+
+9b. REFS VS. STATE â€” THE CORE INSIGHT
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+The solution is the dual-track data access pattern:
+
+  Game loop (rAF, runs every 16.7ms):
+    Reads: landmarksRef.current  â† zero React overhead
+    Writes: canvas pixels        â† zero React overhead
+
+  React rendering and useEffect (triggered by state changes):
+    Reads: landmarks state       â† throttled to 20Hz
+    Triggers: game state transitions, UI updates
+
+The Gemini await happens inside an async function called from a state transition
+handler. While the await is pending:
+  1. The rAF loop continues running at full speed.
+  2. landmarksRef.current is being updated every frame.
+  3. The game is in a "loading" state where it shows a spinner.
+  4. Once the await resolves, the game transitions to 'PLAYING'.
+
+These two operations are on completely different tracks and never interfere.
+
+9c. ADAPTIVE FRAME SKIPPING
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+See section 4c. The key addition is that on mobile, MediaPipe's inference
+baseline is 33ms. If inference takes 40ms (common on older phones), skip=1
+activates, giving MediaPipe a 66ms budget per inference call while still
+rendering at 30fps (because the non-skipped frames are just rAF calls).
+
+9d. MODULE-LEVEL SINGLETON CACHING
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+The HandLandmarker model takes ~600ms to load on first use. Caching it at
+the module level means:
+  - First game load: 600ms initialization
+  - All subsequent game navigations: ~0ms (using cached instance)
+
+This applies even when navigating between completely different games (e.g.,
+from Quiz Quest to Sketch & Score) because the module stays loaded in memory
+as long as the page is open.
+
+9e. THE PERF-MONITOR SYSTEM
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+File: src/lib/perf-monitor.ts
+
+A lightweight performance monitoring system that can be enabled with:
+  ?perf=1 URL parameter
+  OR localStorage.MA_PERF = '1'
+
+When enabled, it wraps MediaPipe inference calls with `perf.mark()` and
+`perf.measure()` to track:
+  - Inference latency per frame (in ms)
+  - FPS calculated over a 1-second sliding window
+  - Percentile latencies: p50, p95, p99
+
+When disabled (default), all perf calls are no-ops with zero cost.
+
+Usage in the inference loop:
+  perf.mark('inference');
+  const results = landmarker.detectForVideo(video, startTimeMs);
+  perf.measure('inference');
+
+
+================================================================================
+10. WHY MEDIAPIPE AND GEMINI NEVER TALK DIRECTLY
+================================================================================
+
+The architectural decision to keep MediaPipe and Gemini completely isolated
+(with the game component as the only bridge) is deliberate and serves several
+engineering goals:
+
+1. LATENCY ISOLATION
+   MediaPipe's real-time loop cannot tolerate any blocking operations. If
+   Gemini calls were somehow inserted into the MediaPipe pipeline, every
+   inference would block for 500msâ€“2000ms. The strict separation ensures
+   the camera loop is never affected by AI latency.
+
+2. SIMPLICITY OF EACH LAYER
+   MediaPipe only needs to know: "What are the hand positions right now?"
+   Gemini only needs to know: "Given these game parameters, generate content."
+   Neither needs to know about the other. This makes each layer independently
+   testable, debuggable, and replaceable.
+
+3. DIFFERENT EXECUTION ENVIRONMENTS
+   MediaPipe runs in the BROWSER (client-side) using WebAssembly.
+   Gemini runs on the SERVER (Next.js Server Action).
+   They physically cannot call each other directly â€” the browser can only
+   initiate requests to the server, not vice versa, and server actions cannot
+   push data to the browser without a WebSocket/SSE connection.
+
+4. DIFFERENT DATA RATES
+   MediaPipe produces 60 data points per second (one Landmark[][] per frame).
+   Gemini consumes approximately 1 request per 12 seconds in Quiz Quest.
+   If every frame was sent to Gemini, the server would receive 60 requests
+   per second from every player simultaneously â€” which would be both
+   prohibitively expensive and technically unsustainable.
+
+5. TYPED CONTRACT AT THE BOUNDARY
+   The Zod schemas on the Genkit flows create an explicit typed contract.
+   The game knows exactly what to send (by TypeScript types) and exactly
+   what to expect back (by Zod validation). This contract prevents the
+   kinds of runtime surprises that happen when untyped raw landmark data
+   crosses system boundaries.
+
+The Sketch & Score game is the only meaningful exception, but even there, hand
+tracking data is first TRANSFORMED into a pixel drawing (a visual artifact),
+and THEN that artifact is sent to Gemini. The raw `Landmark[][]` coordinates
+never reach Gemini â€” only the rendered PNG does.
+
+
+================================================================================
+11. GAMES CATALOGUE â€” WHICH SYSTEMS EACH GAME USES
+================================================================================
+
+QUIZ QUEST (/games/quiz-quest)
+  MediaPipe:     Yes â€” finger counting (0â€“4) for answer selection (A/B/C/D)
+  Gemini AI:     Yes â€” generateQuizQuestion (subject-based trivia questions)
+  Integration:   detectedFingers â†’ potentialAnswer â†’ correctAnswerIndex check
+  AI call rate:  ~1 per 12 seconds (10s thinking timer + 2s feedback)
+  Landmark used: wrist (index 0) for wrist overlay display
+
+MATH CHALLENGE (/games/math-challenge)
+  MediaPipe:     Yes â€” finger counting (0â€“10) for numeric answer
+  Gemini AI:     Yes â€” generateMathProblem (adaptive difficulty, 0-10 solution)
+  Integration:   detectedFingers must equal solution exactly
+  AI call rate:  ~1 per question completion
+  Constraint:    Solution ALWAYS 0â€“10 (matches max finger count)
+
+MATH CHALLENGE 2 (/games/math-challenge-2)
+  MediaPipe:     Yes â€” index fingertip (landmark 8) for bubble collision
+  Gemini AI:     Yes â€” generateMathProblem2 (multiple choice, any number)
+  Integration:   Fingertip x/y position â†’ collides with floating bubbles
+  AI call rate:  ~1 per question completion
+  No finger:     Uses position tracking, not counting
+
+SKETCH & SCORE (/games/sketch-and-score)
+  MediaPipe:     Yes â€” index fingertip for drawing, pinch for eraser,
+                       second hand for eraser size, 10 fingers for clear
+  Gemini AI:     Yes â€” generateShapeToDraw (shape prompts)
+                       evaluatePlayerDrawing (VISION â€” receives PNG)
+  Integration:   Landmark[8] â†’ canvas stroke â†’ PNG â†’ Gemini Vision
+  AI call rate:  2 calls per round (1 generate + 1 evaluate)
+  Special:       ONLY game where hand-derived data reaches Gemini
+
+PING PONG (/games/ping-pong)
+  MediaPipe:     Yes â€” wrist/palm position for paddle control
+  Gemini AI:     NO â€” purely physics-based, no AI content generation
+  Integration:   Landmark[0] (wrist) y-coordinate â†’ paddle y-position
+
+AIR PIANO (/games/air-piano)
+  MediaPipe:     Yes â€” fingertip positions for note collision detection
+  Gemini AI:     NO â€” static note mapping, no AI involved
+  Integration:   Fingertip landmarks â†’ collision with piano key zones
+
+JUST SHOW YOUR HANDS (/games/just-show-your-hands)
+  MediaPipe:     Yes â€” full landmark visualization
+  Gemini AI:     NO â€” technology demonstration only
+
+
+================================================================================
+12. PACKAGE DEPENDENCIES
+================================================================================
+
+MediaPipe:
+  @mediapipe/tasks-vision  0.10.14   â†’ HandLandmarker, FilesetResolver,
+                                        Landmark, Handedness types
+  @mediapipe/drawing_utils 0.3.1675466124 â†’ Optional skeleton drawing helpers
+
+Genkit + Gemini:
+  genkit                   1.29.0    â†’ Core framework, ai.defineFlow,
+                                        ai.definePrompt, z (re-exported Zod)
+  @genkit-ai/google-genai  1.29.0    â†’ googleAI() plugin for Gemini API
+  @genkit-ai/next          1.29.0    â†’ Next.js App Router integration
+  zod                      3.24.2    â†’ Schema validation (also re-exported by genkit)
+
+Framework:
+  next                     15.x      â†’ App Router, Server Actions ('use server'),
+                                        Client Components ('use client')
+  react                    19.x      â†’ useRef, useState, useEffect, useCallback
+
+The WASM and model files are loaded at RUNTIME from CDN, NOT bundled:
+  WASM: https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm
+  Model: https://storage.googleapis.com/mediapipe-models/hand_landmarker/
+          hand_landmarker/float16/1/hand_landmarker.task
+
+The model is float16 (half precision) â€” this is intentional. Full float32
+would be more accurate but would double the model file size and GPU memory
+usage. float16 provides sufficient accuracy for hand tracking while keeping
+the download size manageable.
+
+
+================================================================================
+13. SUMMARY
+================================================================================
+
+The problem of linking MediaPipe and Gemini AI was solved through strict
+architectural separation into three layers, with the game component acting
+as a mediator that coordinates their completely different operational timescales.
+
+THE RULE: MediaPipe and Gemini AI never call each other.
+
+MediaPipe operates at 30â€“60fps in the browser, updating refs every frame
+with zero React overhead. The game component reads those refs inside its
+own render loop for collision detection and canvas rendering. The throttled
+React state (20Hz) triggers useEffect-based game logic like answer selection.
+
+When game logic determines that AI content is needed (e.g., the player
+submitted an answer and a new question is required), the game fires an
+async Gemini call â€” which executes as a Next.js Server Action on the
+server â€” and shows a loading state while it waits. The MediaPipe loop
+continues running throughout.
+
+The only exception to this separation is Sketch & Score, where the player's
+hand-drawn canvas is captured as a PNG and sent to Gemini's vision model
+for evaluation. Even here, raw landmark coordinates never reach Gemini â€”
+only the rendered image does.
+
+This architecture means:
+  1. The camera loop NEVER blocks on AI latency.
+  2. Gemini NEVER receives raw landmark spam (60 requests/second per player).
+  3. Each system is independently testable and replaceable.
+  4. TypeScript types flow correctly across the client/server boundary
+     via Zod-inferred types.
+  5. The game can gracefully degrade: if Gemini fails, the game shows an
+     error and stays at the subject selection screen. If MediaPipe fails,
+     the camera error is caught and displayed. Neither failure cascades
+     into the other system.
+
+================================================================================
+14. SEE ALSO
+================================================================================
+
+  System architecture diagrams (ASCII/box-art) are in a separate file:
+  research/diagrams.txt
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+

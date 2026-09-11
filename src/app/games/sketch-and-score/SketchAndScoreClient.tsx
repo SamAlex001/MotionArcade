@@ -1,3 +1,22 @@
+/**
+ * MotionArcade — touchless AR arcade gaming platform
+ * Copyright (C) 2025-2026 Kartik Hawelikar, Sam Alex, Shubham Bolave, and contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -6,12 +25,18 @@ import { generateShapeToDraw, evaluatePlayerDrawing } from '@/ai/flows/shape-cha
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Loader, Pencil, Eraser, Sparkles, Circle, Square, Triangle, Star, Heart, ArrowRight, Home, CheckCircle2, XCircle, Hand } from 'lucide-react';
+import { Loader, Pencil, Eraser, Sparkles, Circle, Square, Triangle, Star, Heart, ArrowRight, Home, CheckCircle2, XCircle, Hand, Eye, EyeOff } from 'lucide-react';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import { landmarkToCanvas } from '@/lib/video-utils';
 
 type GameState = 'IDLE' | 'LOADING_CAMERA' | 'GET_READY' | 'COUNTDOWN' | 'DRAWING' | 'SUBMITTING' | 'FEEDBACK';
 type DrawingTool = 'PENCIL' | 'ERASER';
+type HandChoice = 'Left' | 'Right';
 
 const COUNTDOWN_SECONDS = 3;
+const MIN_ERASER_SIZE = 5;
+const MAX_ERASER_SIZE = 50;
 
 // A mapping of shape names to Lucide icons
 const shapeIcons: Record<string, React.ReactNode> = {
@@ -26,21 +51,35 @@ const shapeIcons: Record<string, React.ReactNode> = {
 
 
 export default function SketchAndScoreClient() {
-  const { videoRef, landmarks, handedness, startVideo, stopVideo, isLoading: isHandTrackingLoading, error: handTrackingError } = useHandTracking();
+  const [drawingHand, setDrawingHand] = useState<HandChoice | null>(null);
+  const { videoRef, landmarks, landmarksRef, handedness, handednessRef, startVideo, stopVideo, isLoading: isHandTrackingLoading, error: handTrackingError, detectedFingers, detectedFingersRef } = useHandTracking();
   const drawingCanvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null); // Canvas for UI overlays
   const lastPosition = useRef<{ x: number, y: number } | null>(null);
-  const lastSecondaryFingers = useRef<number>(0);
+  const midPointRef = useRef<{ x: number, y: number } | null>(null);
+  const tenFingersHeldRef = useRef(false);
+  const lastTenFingerActionRef = useRef(0);
+  const isMobile = useIsMobile();
   
   const { toast } = useToast();
 
   const [gameState, setGameState] = useState<GameState>('IDLE');
   const [shapeToDraw, setShapeToDraw] = useState<string | null>(null);
+  const [drawnShapes, setDrawnShapes] = useState<string[]>([]);
   const [score, setScore] = useState(0);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
   const [drawingTool, setDrawingTool] = useState<DrawingTool>('PENCIL');
   const [feedback, setFeedback] = useState<{isMatch: boolean, message: string} | null>(null);
+  const [eraserSize, setEraserSize] = useState(25);
+  const eraserSizeRef = useRef(25);
+  useEffect(() => {
+    eraserSizeRef.current = eraserSize;
+  }, [eraserSize]);
+  const [isBlurEnabled, setIsBlurEnabled] = useState(false);
 
   const getDrawingContext = useCallback(() => drawingCanvasRef.current?.getContext('2d'), []);
+  const getOverlayContext = useCallback(() => overlayCanvasRef.current?.getContext('2d'), []);
+
 
   useEffect(() => {
     if (handTrackingError) {
@@ -56,8 +95,11 @@ export default function SketchAndScoreClient() {
 
   const fetchNewShape = useCallback(async () => {
     try {
-      const { shape } = await generateShapeToDraw();
+      // Pass the list of already drawn shapes to the AI flow
+      const { shape } = await generateShapeToDraw({ pastShapes: drawnShapes });
       setShapeToDraw(shape);
+      // Add the new shape to our list of drawn shapes for the next round
+      setDrawnShapes(prev => [...prev, shape]);
       setGameState('GET_READY');
     } catch (error) {
       toast({
@@ -67,10 +109,12 @@ export default function SketchAndScoreClient() {
       });
       setGameState('IDLE');
     }
-  }, [toast]);
+  }, [toast, drawnShapes]);
   
-  const startGame = useCallback(async () => {
+  const startGame = useCallback(async (hand: HandChoice) => {
+    setDrawingHand(hand);
     setScore(0);
+    setDrawnShapes([]); // Reset the list of drawn shapes for a new game
     setGameState('LOADING_CAMERA');
     try {
       await startVideo();
@@ -97,6 +141,12 @@ export default function SketchAndScoreClient() {
     if(ctx && drawingCanvasRef.current) {
         ctx.clearRect(0, 0, drawingCanvasRef.current.width, drawingCanvasRef.current.height);
     }
+    lastPosition.current = null;
+    midPointRef.current = null;
+    // Deliberately do NOT reset tenFingersHeldRef here: while the user is
+    // still holding 10 fingers up, resetting it would re-arm the gesture and
+    // clear the canvas again on the very next frame. The gesture effect
+    // resets it once the finger count drops below 10.
   }, [getDrawingContext]);
 
   const handleSubmit = async () => {
@@ -120,7 +170,7 @@ export default function SketchAndScoreClient() {
     tempCanvas.width = sourceCanvas.width;
     tempCanvas.height = sourceCanvas.height;
 
-    // Fill with a white background
+    // Fill with a white background to handle transparency
     tempCtx.fillStyle = '#FFFFFF';
     tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
     
@@ -150,269 +200,419 @@ export default function SketchAndScoreClient() {
   const handleNextQuestion = () => {
     setFeedback(null);
     clearCanvas();
-    lastPosition.current = null;
     fetchNewShape();
   }
-
-  // Helper to count fingers for a single hand
-  const countFingersForHand = (handLandmarks: any[]): number => {
-    if (!handLandmarks || handLandmarks.length < 21) return 0;
-    
-    const tipIds = [4, 8, 12, 16, 20];
-    const pipIds = [2, 6, 10, 14, 18];
-    
-    let raisedFingers = 0;
-
-    // Thumb: Check if tip is "above" the MCP joint relative to the palm
-    // A simple x-check can be more stable for thumb than y-check
-    const hand = handedness.find(h => h[0].categoryName === 'Right') ? 'Right' : 'Left';
-    if(hand === 'Right'){
-      if (handLandmarks[tipIds[0]].x < handLandmarks[tipIds[0] - 1].x) raisedFingers++;
-    } else {
-      if (handLandmarks[tipIds[0]].x > handLandmarks[tipIds[0] - 1].x) raisedFingers++;
-    }
-
-
-    // Fingers: Check if tip is above the PIP joint
-    for (let i = 1; i < 5; i++) {
-      if (handLandmarks[tipIds[i]].y < handLandmarks[pipIds[i]].y) {
-        raisedFingers++;
-      }
-    }
-
-    return raisedFingers;
-  };
   
   const isPointing = (handLandmarks: any[]): boolean => {
       if (!handLandmarks || handLandmarks.length < 21) return false;
 
-      const tipIds = { index: 8, middle: 12, ring: 16, pinky: 20 };
-      const pipIds = { index: 6, middle: 10, ring: 14, pinky: 18 };
+      // Check if index finger is extended
+      const indexTip = handLandmarks[8];
+      const indexPip = handLandmarks[6];
 
-      // Check if index finger is extended (tip is above pip)
-      const indexFingerExtended = handLandmarks[tipIds.index].y < handLandmarks[pipIds.index].y;
+      // Check if other fingers are curled
+      const middleTip = handLandmarks[12];
+      const middlePip = handLandmarks[10];
+      const ringTip = handLandmarks[16];
+      const ringPip = handLandmarks[14];
+      const pinkyTip = handLandmarks[20];
+      const pinkyPip = handLandmarks[18];
 
-      // Check if other fingers (middle, ring, pinky) are curled (tip is below pip)
-      const middleFingerCurled = handLandmarks[tipIds.middle].y > handLandmarks[pipIds.middle].y;
-      const ringFingerCurled = handLandmarks[tipIds.ring].y > handLandmarks[pipIds.ring].y;
-      const pinkyFingerCurled = handLandmarks[tipIds.pinky].y > handLandmarks[pipIds.pinky].y;
-
-      return indexFingerExtended && middleFingerCurled && ringFingerCurled && pinkyFingerCurled;
+      return (
+        indexTip.y < indexPip.y &&
+        middleTip.y > middlePip.y &&
+        ringTip.y > ringPip.y &&
+        pinkyTip.y > pinkyPip.y
+      );
   };
+  
+  const isPinching = (handLandmarks: any[]): boolean => {
+    if (!handLandmarks || handLandmarks.length < 21) return false;
+    const thumbTip = handLandmarks[4];
+    const indexTip = handLandmarks[8];
+    const distance = Math.sqrt(
+        Math.pow(thumbTip.x - indexTip.x, 2) +
+        Math.pow(thumbTip.y - indexTip.y, 2) +
+        Math.pow((thumbTip.z || 0) - (indexTip.z || 0), 2)
+    );
+    // This threshold may need adjustment
+    return distance < 0.05; 
+  }
 
   // Main gesture detection logic
   useEffect(() => {
-    if (!landmarks.length || isHandTrackingLoading || gameState === 'SUBMITTING' || gameState === 'FEEDBACK') {
-        if (landmarks.length === 0) {
-            // Reset last finger count if no hands are detected
-            lastSecondaryFingers.current = 0;
-        }
+    if (isHandTrackingLoading || !['GET_READY', 'COUNTDOWN', 'DRAWING'].includes(gameState)) {
         return;
+    }
+
+    let animationFrameId: number;
+
+    const renderLoop = () => {
+      const currentLandmarks = landmarksRef.current;
+      const currentHandedness = handednessRef.current;
+      const currentDetectedFingers = detectedFingersRef.current;
+
+      if (!currentLandmarks.length) {
+        animationFrameId = requestAnimationFrame(renderLoop);
+        return;
+      }
+
+      const overlayCtx = getOverlayContext();
+      if(overlayCtx && overlayCanvasRef.current){
+        overlayCtx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
+      }
+      
+      // Prioritize the 10-finger clear gesture for desktop — edge-triggered so it
+      // fires only once per gesture hold, not every frame while fingers are up.
+      // A cooldown guards against hand-tracking jitter (10 → 9 → 10 across
+      // frames) re-arming the trigger mid-hold.
+      if (!isMobile && currentDetectedFingers === 10) {
+          if (!tenFingersHeldRef.current) {
+              tenFingersHeldRef.current = true;
+              const now = performance.now();
+              if (now - lastTenFingerActionRef.current > 1500) {
+                lastTenFingerActionRef.current = now;
+                if (gameState === 'GET_READY') {
+                  setCountdown(COUNTDOWN_SECONDS);
+                  setGameState('COUNTDOWN');
+                } else if (gameState === 'DRAWING') {
+                  clearCanvas();
+                  toast({ title: "Canvas Cleared!" });
+                }
+              }
+          }
+          animationFrameId = requestAnimationFrame(renderLoop);
+          return;
+      }
+      tenFingersHeldRef.current = false;
+
+
+      let drawingHandLandmarks: any[] | null = null;
+      let gestureHandLandmarks: any[] | null = null;
+      
+      if (drawingHand) {
+        const gestureHandChoice = drawingHand === 'Left' ? 'Right' : 'Left';
+        for(let i=0; i<currentHandedness.length; i++) {
+          if (currentHandedness[i][0].categoryName === drawingHand) {
+            drawingHandLandmarks = currentLandmarks[i];
+          } else if (currentHandedness[i][0].categoryName === gestureHandChoice) {
+            gestureHandLandmarks = currentLandmarks[i];
+          }
+        }
+      }
+      
+      if (gameState === 'DRAWING') {
+          if (drawingHandLandmarks) {
+              const pointing = isPointing(drawingHandLandmarks);
+              
+              let currentTool: DrawingTool | null = null;
+              let activeLandmark: any | null = null;
+              
+              // On desktop, pinching controls the eraser. On mobile, it's a button.
+              const pinching = !isMobile && isPinching(drawingHandLandmarks);
+
+              if (pinching) {
+                  currentTool = 'ERASER';
+                  activeLandmark = drawingHandLandmarks[8]; // Use index finger tip for erasing position
+              } else if (pointing) {
+                  currentTool = 'PENCIL';
+                  activeLandmark = drawingHandLandmarks[8];
+              }
+              
+              // Only update tool state if it's different and not on mobile (where it's manual)
+              if (currentTool && drawingTool !== currentTool && !isMobile) {
+                  setDrawingTool(currentTool);
+              }
+
+              const activeTool = isMobile ? drawingTool : currentTool;
+
+              if (activeLandmark && activeTool) {
+                  const drawingCtx = getDrawingContext();
+                  const video = videoRef.current;
+                  if (drawingCanvasRef.current && drawingCtx && video) {
+                      const { x: mirroredX, y } = landmarkToCanvas(activeLandmark.x, activeLandmark.y, video, true);
+
+                      // Apply smoothing (Exponential Moving Average) to reduce jitter
+                      const smoothingFactor = 0.4;
+                      let currentX = mirroredX;
+                      let currentY = y;
+
+                      if (lastPosition.current) {
+                          currentX = lastPosition.current.x + (mirroredX - lastPosition.current.x) * smoothingFactor;
+                          currentY = lastPosition.current.y + (y - lastPosition.current.y) * smoothingFactor;
+                      }
+
+                      if (activeTool === 'PENCIL') {
+                          drawingCtx.globalCompositeOperation = 'source-over';
+                          drawingCtx.strokeStyle = 'black';
+                          drawingCtx.lineWidth = 5;
+                      } else { // ERASER
+                          drawingCtx.globalCompositeOperation = 'destination-out';
+                          drawingCtx.lineWidth = eraserSizeRef.current;
+                      }
+                      
+                      drawingCtx.lineCap = 'round';
+                      drawingCtx.lineJoin = 'round';
+                      
+                      if (lastPosition.current) {
+                          const midPoint = {
+                              x: (lastPosition.current.x + currentX) / 2,
+                              y: (lastPosition.current.y + currentY) / 2
+                          };
+                          drawingCtx.beginPath();
+                          drawingCtx.moveTo(midPointRef.current?.x ?? lastPosition.current.x, midPointRef.current?.y ?? lastPosition.current.y);
+                          drawingCtx.quadraticCurveTo(lastPosition.current.x, lastPosition.current.y, midPoint.x, midPoint.y);
+                          drawingCtx.stroke();
+                          midPointRef.current = midPoint;
+                      } else {
+                        drawingCtx.beginPath();
+                        drawingCtx.arc(currentX, currentY, drawingCtx.lineWidth / 2, 0, Math.PI * 2);
+                        drawingCtx.fill();
+                      }
+                      lastPosition.current = { x: currentX, y: currentY };
+                  }
+              } else {
+                  lastPosition.current = null;
+                  midPointRef.current = null;
+              }
+          } else {
+            lastPosition.current = null;
+            midPointRef.current = null;
+          }
+
+          // On desktop, second hand controls eraser size
+          if (!isMobile && gestureHandLandmarks && drawingTool === 'ERASER') {
+            const thumbTip = gestureHandLandmarks[4];
+            const indexTip = gestureHandLandmarks[8];
+            const distance = Math.sqrt(
+              Math.pow(thumbTip.x - indexTip.x, 2) +
+              Math.pow(thumbTip.y - indexTip.y, 2)
+            );
+
+            const newSize = MIN_ERASER_SIZE + (distance / 0.3) * (MAX_ERASER_SIZE - MIN_ERASER_SIZE);
+            const clampedSize = Math.max(MIN_ERASER_SIZE, Math.min(MAX_ERASER_SIZE, newSize));
+            eraserSizeRef.current = clampedSize;
+
+            // Draw eraser size indicator on the overlay canvas
+            if (overlayCtx && overlayCanvasRef.current) {
+              const video = videoRef.current;
+              if (video) {
+                // Calculate midpoint between thumb and index finger
+                const { x: midX, y: midY } = landmarkToCanvas(
+                  (thumbTip.x + indexTip.x) / 2,
+                  (thumbTip.y + indexTip.y) / 2,
+                  video,
+                  true
+                );
+
+              overlayCtx.save();
+              overlayCtx.globalAlpha = 0.5;
+              overlayCtx.fillStyle = 'white';
+              overlayCtx.strokeStyle = 'black';
+              overlayCtx.lineWidth = 2;
+
+              // Draw circle indicator
+              overlayCtx.beginPath();
+              overlayCtx.arc(midX, midY, clampedSize / 2, 0, Math.PI * 2);
+              overlayCtx.fill();
+              overlayCtx.stroke();
+
+              // Draw size text
+              overlayCtx.globalAlpha = 1.0;
+              overlayCtx.fillStyle = 'black';
+              overlayCtx.font = 'bold 16px sans-serif';
+              overlayCtx.textAlign = 'center';
+              overlayCtx.textBaseline = 'middle';
+              overlayCtx.fillText(Math.round(clampedSize).toString(), midX, midY);
+              overlayCtx.restore();
+              }
+            }
+          }
+      } else {
+          lastPosition.current = null;
+          midPointRef.current = null;
+      }
+      
+      animationFrameId = requestAnimationFrame(renderLoop);
     };
 
-    let totalFingers = landmarks.reduce((acc, hand) => acc + countFingersForHand(hand), 0);
+    animationFrameId = requestAnimationFrame(renderLoop);
 
-    if (gameState === 'GET_READY' && totalFingers === 10) {
-        setCountdown(COUNTDOWN_SECONDS);
-        setGameState('COUNTDOWN');
-        return;
-    }
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [gameState, drawingTool, clearCanvas, toast, getDrawingContext, getOverlayContext, isHandTrackingLoading, drawingHand, isMobile, landmarksRef, handednessRef, detectedFingersRef]);
 
-    if (gameState === 'DRAWING') {
-        if (totalFingers >= 10) {
-            clearCanvas();
-            lastPosition.current = null;
-            toast({ title: "Canvas Cleared!" });
-            return;
-        }
-        
-        let primaryHand: any[] | null = null;
-        let secondaryHand: any[] | null = null;
-        
-        const pointingHandIndex = landmarks.findIndex(isPointing);
 
-        if (pointingHandIndex !== -1) {
-            primaryHand = landmarks[pointingHandIndex];
-            secondaryHand = landmarks[1 - pointingHandIndex]; // The other hand
-        } else {
-            // No hand is pointing, reset drawing position and gesture memory
-            lastPosition.current = null;
-            lastSecondaryFingers.current = 0; 
-            return;
-        }
-
-        // Process gestures from the secondary hand
-        const secondaryFingers = secondaryHand ? countFingersForHand(secondaryHand) : 0;
-        
-        // Only process gesture if the finger count has changed to prevent flickering
-        if (secondaryFingers !== lastSecondaryFingers.current) {
-             if (secondaryFingers === 5) {
-                if(drawingTool !== 'ERASER') {
-                  setDrawingTool('ERASER');
-                  toast({title: "Eraser activated!"});
-                }
-            } else if (secondaryFingers === 4) {
-                 if(drawingTool !== 'PENCIL') {
-                  setDrawingTool('PENCIL');
-                  toast({title: "Pencil activated!"});
-                }
-            }
-        }
-        lastSecondaryFingers.current = secondaryFingers;
-
-        // Handle drawing with primary hand
-        if (primaryHand) {
-            const indexTip = primaryHand[8];
-            const ctx = getDrawingContext();
-            
-            if (drawingCanvasRef.current && indexTip && ctx) {
-                const canvas = drawingCanvasRef.current;
-                const x = (1 - indexTip.x) * canvas.width;
-                const y = indexTip.y * canvas.height;
-
-                if (drawingTool === 'PENCIL') {
-                    ctx.globalCompositeOperation = 'source-over';
-                    ctx.strokeStyle = 'black';
-                    ctx.lineWidth = 5;
-                } else { // ERASER
-                    ctx.globalCompositeOperation = 'destination-out';
-                    ctx.lineWidth = 25;
-                }
-                
-                ctx.beginPath();
-                ctx.lineCap = 'round';
-                ctx.lineJoin = 'round';
-
-                if (lastPosition.current) {
-                    ctx.moveTo(lastPosition.current.x, lastPosition.current.y);
-                } else {
-                    ctx.moveTo(x, y);
-                }
-                ctx.lineTo(x, y);
-                ctx.stroke();
-                lastPosition.current = { x, y };
-            }
-        } else {
-            lastPosition.current = null;
-        }
-    }
-}, [landmarks, handedness, gameState, drawingTool, clearCanvas, toast, getDrawingContext, isHandTrackingLoading]);
-  
-  
-  // Keep drawing canvas size in sync with video
+  // Keep canvas sizes in sync with video
   useEffect(() => {
     const video = videoRef.current;
-    const drawingCanvas = drawingCanvasRef.current;
-    if (!video || !drawingCanvas) return;
+    if (!video) return;
+
+    const canvases = [drawingCanvasRef.current, overlayCanvasRef.current];
 
     const updateSize = () => {
-        const { videoWidth, videoHeight } = video;
-        if (videoWidth > 0 && videoHeight > 0) {
-            if (drawingCanvas.width !== videoWidth || drawingCanvas.height !== videoHeight) {
-                drawingCanvas.width = videoWidth;
-                drawingCanvas.height = videoHeight;
-            }
+        const { clientWidth, clientHeight } = video;
+        if (clientWidth > 0 && clientHeight > 0) {
+            canvases.forEach(canvas => {
+                if (canvas && (canvas.width !== clientWidth || canvas.height !== clientHeight)) {
+                    canvas.width = clientWidth;
+                    canvas.height = clientHeight;
+                }
+            });
         }
     };
     
-    // Check if video is ready, otherwise wait for the loadeddata event
     if (video.readyState >= 2) { // HAVE_CURRENT_DATA
         updateSize();
     } else {
         video.addEventListener('loadeddata', updateSize, { once: true });
     }
     
+    const resizeObserver = new ResizeObserver(updateSize);
+    resizeObserver.observe(video);
+
     return () => {
       if (video) {
         video.removeEventListener('loadeddata', updateSize);
       }
+      resizeObserver.disconnect();
     };
-  }, [videoRef, drawingCanvasRef, gameState]);
+  }, [videoRef, drawingCanvasRef, overlayCanvasRef, gameState]);
 
 
   const renderContent = () => {
     if (gameState === 'IDLE') {
-      return (
-        <div className="flex items-center justify-center h-full">
-            <Card className="max-w-xl text-center p-8">
-                <CardHeader>
-                    <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
-                        <Pencil className="h-10 w-10" />
-                    </div>
-                    <CardTitle className="font-headline text-4xl">Sketch & Score</CardTitle>
-                    <CardDescription className="text-lg text-muted-foreground pt-2">
-                        Draw the shape on screen using your index finger. Use gestures to control your tools and submit your masterpiece to the AI judge!
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <Button onClick={startGame} size="lg" className="font-headline text-xl">Start Drawing</Button>
-                </CardContent>
-            </Card>
-        </div>
-      );
-    }
+        return (
+          <div className="flex items-center justify-center h-full">
+              <Card className="max-w-xl text-center p-8 rounded-2xl border-2 border-amber-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-amber-500/40 text-white">
+                  <CardHeader>
+                      <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full border-2 border-amber-400/40 bg-amber-500/15 text-amber-400">
+                          <Pencil className="h-10 w-10" />
+                      </div>
+                      <CardTitle className="font-headline font-bold text-4xl text-white">Sketch &amp; <span className="text-amber-400">Score</span></CardTitle>
+                      <CardDescription className="text-lg text-white/70 pt-2">
+                        {isMobile ? "Which hand will you draw with?" : "Which hand will you use to draw?"}
+                      </CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex justify-center gap-4">
+                      <Button onClick={() => startGame('Left')} size="lg" className="font-headline text-xl rounded-xl border-2 border-white/80 bg-amber-500 font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Left Hand</Button>
+                      <Button onClick={() => startGame('Right')} size="lg" className="font-headline text-xl rounded-xl border-2 border-white/80 bg-amber-500 font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Right Hand</Button>
+                  </CardContent>
+              </Card>
+          </div>
+        );
+      }
     
     return (
         <>
-            {/* These elements are now always rendered after IDLE state */}
             <video ref={videoRef} autoPlay playsInline muted className="absolute top-0 left-0 w-full h-full object-cover scale-x-[-1]"></video>
-            <canvas ref={drawingCanvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
+            {isBlurEnabled && (
+                <div className="absolute inset-0 bg-white/50 backdrop-blur-md pointer-events-none"></div>
+            )}
+            <canvas ref={drawingCanvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-80"></canvas>
+            <canvas ref={overlayCanvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
+
 
             {(isHandTrackingLoading || gameState === 'LOADING_CAMERA') && (
               <div className="absolute inset-0 bg-black/60 flex flex-col gap-4 items-center justify-center rounded-lg text-white z-30">
-                <Loader className="h-16 w-16 animate-spin" />
-                <p className="font-headline text-3xl">{gameState === 'LOADING_CAMERA' ? "Starting Camera..." : "Loading Hand Tracking..."}</p>
+                <Loader className="h-16 w-16 animate-spin text-amber-400" />
+                <p className="font-headline font-bold text-3xl">{gameState === 'LOADING_CAMERA' ? "Starting Camera..." : "Loading Hand Tracking..."}</p>
               </div>
             )}
 
             {shapeToDraw && !['IDLE', 'FEEDBACK', 'LOADING_CAMERA'].includes(gameState) && (
-              <Card className="absolute top-4 right-4 w-48 h-48 flex flex-col items-center justify-center bg-background/80 backdrop-blur-sm z-10">
+              <Card className="absolute top-4 right-4 w-48 h-48 flex flex-col items-center justify-center rounded-2xl border-2 border-amber-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-amber-500/40 z-10">
                 <CardHeader className="p-2 text-center">
-                  <CardTitle className="text-md font-headline">Draw This:</CardTitle>
+                  <CardTitle className="text-md font-headline font-bold text-white">Draw This:</CardTitle>
                 </CardHeader>
-                <CardContent className="p-2 flex-1 flex items-center justify-center text-primary">
+                <CardContent className="p-2 flex-1 flex items-center justify-center text-amber-400">
                   {shapeIcons[shapeToDraw.toLowerCase()] || <Pencil className="h-24 w-24" />}
                 </CardContent>
               </Card>
             )}
 
             {gameState === 'GET_READY' && (
-                <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center rounded-lg text-white z-20">
-                    <h2 className="font-headline text-5xl mb-4">Show 10 Fingers to Start!</h2>
-                    <Hand className="h-24 w-24 animate-pulse" />
+                <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center rounded-lg text-white z-20 text-center p-4">
+                  {isMobile ? (
+                     <>
+                      <h2 className="font-headline font-bold text-5xl mb-4">Get <span className="text-amber-400">Ready!</span></h2>
+                      <Button onClick={() => {
+                        setCountdown(COUNTDOWN_SECONDS);
+                        setGameState('COUNTDOWN');
+                      }} size="lg" className="rounded-xl border-2 border-white/80 bg-amber-500 font-headline font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Tap to Start</Button>
+                     </>
+                  ): (
+                    <>
+                      <h2 className="font-headline font-bold text-5xl mb-4">Show <span className="text-amber-400">10 Fingers</span> to Start!</h2>
+                      <Hand className="h-24 w-24 animate-pulse text-amber-400" />
+                    </>
+                  )}
                 </div>
             )}
              {gameState === 'COUNTDOWN' && (
                 <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-lg z-20">
-                    <h2 className="font-headline text-9xl text-white">{countdown}</h2>
+                    <h2 className="font-headline font-bold text-9xl text-amber-400">{countdown}</h2>
                 </div>
             )}
             {gameState === 'DRAWING' && (
                 <div className="absolute bottom-4 left-0 right-0 flex justify-center items-center gap-4 z-20">
-                  <div className="flex justify-center w-full">
-                    <Button onClick={handleSubmit} size="lg" className="font-headline text-lg" >
+                  <div className="flex justify-center items-center w-full">
+                    <Button onClick={handleSubmit} size="lg" className="font-headline text-lg rounded-xl border-2 border-white/80 bg-amber-500 font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]" >
                       <Sparkles className="mr-2"/> Submit Drawing
                     </Button>
-                    <Card className="p-2 px-4 flex items-center gap-2 bg-background/80 ml-4">
-                      <span className="text-muted-foreground text-sm font-bold">TOOL:</span>
-                      {drawingTool === 'PENCIL' ? <Pencil className="h-6 w-6 text-primary"/> : <Eraser className="h-6 w-6 text-blue-400" />}
-                    </Card>
+                    <Button onClick={() => setIsBlurEnabled(!isBlurEnabled)} variant="outline" size="icon" className="h-12 w-12 rounded-xl border-2 border-white/40 bg-black/40 text-white backdrop-blur transition-all hover:bg-black/60 ml-4" title="Toggle Background Blur">
+                        {isBlurEnabled ? <EyeOff /> : <Eye />}
+                    </Button>
+                    {isMobile ? (
+                      <div className="flex gap-2 ml-4">
+                        <Button onClick={() => setDrawingTool(t => t === 'PENCIL' ? 'ERASER' : 'PENCIL')} variant="outline" size="icon" className="h-12 w-12 rounded-xl border-2 border-white/40 bg-white/10 text-white backdrop-blur transition-all hover:bg-white/20">
+                          {drawingTool === 'PENCIL' ? <Eraser/> : <Pencil/>}
+                        </Button>
+                         <Button onClick={clearCanvas} variant="destructive" size="icon" className="h-12 w-12 rounded-xl border-2 border-white/40 bg-red-500/80 text-white backdrop-blur transition-all hover:bg-red-600">
+                          <XCircle/>
+                        </Button>
+                      </div>
+                    ) : (
+                      <Card className="py-1.5 px-4 flex items-center gap-2 rounded-full border-2 border-white/20 bg-black/60 font-headline font-bold text-white backdrop-blur ml-4">
+                        <span className="text-white/60 text-sm font-bold">TOOL:</span>
+                        {drawingTool === 'PENCIL' ? <Pencil className="h-6 w-6 text-amber-400"/> : <Eraser className="h-6 w-6 text-teal-300" />}
+                      </Card>
+                    )}
                   </div>
                 </div>
             )}
              {gameState === 'SUBMITTING' && (
                 <div className="absolute inset-0 bg-black/60 flex flex-col gap-4 items-center justify-center rounded-lg text-white z-30">
-                    <Loader className="h-16 w-16 animate-spin" />
-                    <p className="font-headline text-3xl">AI is judging your art...</p>
+                    <Loader className="h-16 w-16 animate-spin text-amber-400" />
+                    <p className="font-headline font-bold text-3xl">AI is judging your art...</p>
                 </div>
             )}
              {gameState === 'FEEDBACK' && feedback && (
-                 <div className="absolute inset-0 bg-black/70 flex flex-col gap-4 items-center justify-center rounded-lg text-white z-30">
+                 <div className="absolute inset-0 bg-black/70 flex flex-col gap-4 items-center justify-center rounded-lg text-white z-30 text-center p-4">
                     {feedback.isMatch ? <CheckCircle2 className="h-24 w-24 text-green-400" /> : <XCircle className="h-24 w-24 text-red-400" />}
-                    <h2 className="font-headline text-4xl max-w-lg text-center">{feedback.message}</h2>
-                    <h3 className="text-2xl font-bold">Your Score: {score}</h3>
-                    <Button onClick={handleNextQuestion} size="lg" className="font-headline text-lg mt-4">Next Shape</Button>
+                    <h2 className="font-headline font-bold text-4xl max-w-lg">{feedback.message}</h2>
+                    <h3 className="text-2xl font-headline font-bold">Your Score: <span className="text-amber-300">{score}</span></h3>
+                    <Button onClick={handleNextQuestion} size="lg" className="font-headline text-lg mt-4 rounded-xl border-2 border-white/80 bg-amber-500 font-bold text-white shadow-[3px_3px_0_0_rgba(255,255,255,0.3)] transition-all hover:translate-y-[2px] hover:bg-amber-600 hover:shadow-[1px_1px_0_0_rgba(255,255,255,0.3)]">Next Shape</Button>
                 </div>
+            )}
+             {isMobile && gameState === 'DRAWING' && drawingTool === 'ERASER' && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 w-4/5 max-w-xs z-20">
+                <Alert className="rounded-2xl border-2 border-amber-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-amber-500/40 text-white">
+                  <Eraser className="h-4 w-4 text-amber-400" />
+                  <AlertTitle className="font-headline font-bold">Eraser Size</AlertTitle>
+                  <AlertDescription>
+                     <input
+                        type="range"
+                        min={MIN_ERASER_SIZE}
+                        max={MAX_ERASER_SIZE}
+                        value={eraserSize}
+                        onChange={(e) => setEraserSize(Number(e.target.value))}
+                        className="w-full"
+                      />
+                  </AlertDescription>
+                </Alert>
+              </div>
             )}
         </>
     );
@@ -420,9 +620,21 @@ export default function SketchAndScoreClient() {
 
 
   return (
-    <div className="container mx-auto px-4 py-8 flex-grow flex flex-col items-center justify-center">
-      <div className="w-full max-w-7xl aspect-video relative rounded-lg shadow-lg overflow-hidden bg-muted">
+    <div className="container mx-auto px-4 py-4 lg:py-8 flex-grow flex flex-col items-center justify-start lg:justify-center">
+      <div className="w-full max-w-7xl aspect-[3/4] lg:aspect-video relative rounded-2xl border-2 border-amber-400/50 shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-amber-500/30 overflow-hidden bg-black">
         {renderContent()}
+      </div>
+
+      {/* Instructions */}
+      <div className="w-full max-w-7xl mt-6 p-6 rounded-2xl border-2 border-amber-400/70 bg-black/75 backdrop-blur-md shadow-[6px_6px_0_0_var(--tw-shadow-color)] shadow-amber-500/40">
+        <h3 className="text-xl font-headline font-bold text-amber-400 mb-3">How to Play</h3>
+        <ul className="text-gray-300 space-y-2">
+          <li>✋ Use your index finger to draw the shape shown on the screen</li>
+          <li>✌️ Pinch your thumb and index finger together to use the eraser</li>
+          <li>📏 Widen or close your other hand's thumb and index finger to change the eraser size</li>
+          <li>🖐️ Show all 10 fingers to clear the canvas</li>
+          <li>🤖 Submit your drawing for the AI to score it!</li>
+        </ul>
       </div>
     </div>
   );
